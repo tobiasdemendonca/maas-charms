@@ -289,10 +289,6 @@ class MaasHelper:
             admin_username,
             "region-controllers",
             "read",
-            "|",
-            "jq",
-            "-r",
-            ".[].system_id",
         ]
         return subprocess.check_output(cmd).decode()
 
