@@ -3,11 +3,12 @@
 
 """Helper functions for MAAS management."""
 
+import json
 import logging
 import subprocess
 from os import remove
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Set, Union
 
 import yaml
 from charms.operator_libs_linux.v2.snap import SnapCache, SnapState
@@ -296,7 +297,7 @@ class MaasHelper:
         return subprocess.check_output(cmd).decode()
 
     @staticmethod
-    def get_regions(admin_username: str, maas_ip: str) -> List[str]:
+    def get_regions(admin_username: str, maas_ip: str) -> Set[str]:
         """Get the list of region controllers.
 
         Args:
@@ -309,9 +310,9 @@ class MaasHelper:
         Raises:
             CalledProcessError: failed to read regions from MAAS
         """
-        return (
-            MaasHelper._call_read_regions(admin_username, maas_ip).strip().splitlines()
-        )
+        regions_output = MaasHelper._call_read_regions(admin_username, maas_ip)
+        region_data = json.loads(regions_output)
+        return {region["system_id"] for region in region_data}
 
     @staticmethod
     def is_tls_enabled() -> Union[bool, None]:

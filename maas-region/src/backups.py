@@ -13,7 +13,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from io import BytesIO
 from subprocess import run
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Set, Tuple, Union
 
 import ops
 from boto3.session import Session
@@ -495,14 +495,14 @@ Juju Version: {self.charm.model.juju_version!s}
 
         self.charm.unit.status = ActiveStatus()
 
-    def _get_region_ids(self, username: str) -> tuple[bool, List[str]]:
+    def _get_region_ids(self, username: str) -> tuple[bool, Set[str]]:
         try:
             return True, MaasHelper.get_regions(
                 admin_username=username, maas_ip=self.charm.bind_address
             )
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to get region ids: {e}")
-            return False, []
+            return False, set()
 
     #  def _on_create_backup_action_jack(self, event: ops.ActionEvent) -> None:
     #     """Create a MAAS backup, returning the backup-id."""
@@ -543,7 +543,9 @@ Juju Version: {self.charm.model.juju_version!s}
         bucket = s3.Bucket(bucket_name)
 
         # get regions
+        logger.critical("About to get regions")
         success, regions = self._get_region_ids(username=username)
+        logger.critical(f"Regions {regions}")
         if not success:
             logger.error("Failed to get region ids for S3 backup")
             self.charm.unit.status = ops.BlockedStatus(
