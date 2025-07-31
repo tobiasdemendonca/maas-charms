@@ -539,7 +539,7 @@ Juju Version: {self.charm.model.juju_version!s}
         # get bucket
         bucket_name = s3_parameters["bucket"]
         processed_s3_path = os.path.join(s3_parameters["path"], s3_path).lstrip("/")
-        s3 = self._get_s3_session_resource(ca_file_path, s3_parameters)
+        s3 = self._get_s3_session_resource(s3_parameters, ca_file_path)
         bucket = s3.Bucket(bucket_name)
 
         # get regions
@@ -633,7 +633,7 @@ Juju Version: {self.charm.model.juju_version!s}
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
-
+        logging.critical("Passed the upload stage")
         return_code, stdout, stderr = self._execute_command(command)
         if return_code != 0:
             logger.error(stderr)
