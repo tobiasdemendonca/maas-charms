@@ -447,6 +447,7 @@ class MAASBackups(Object):
 
     def _on_create_backup_action(self, event) -> None:
         username = event.params["username"]
+
         logger.info("A backup has been requested on unit")
         can_unit_perform_backup, validation_message = self._can_unit_perform_backup()
 
@@ -467,13 +468,13 @@ Unit Name: {self.charm.unit.name}
 Juju Version: {self.charm.model.juju_version!s}
 """
         ca_chain = s3_parameters.get("tls-ca-chain", [])
+        logging.info("Uploading metadata to S3")
         with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
             if ca_file:
                 ca = "\n".join(ca_chain)
                 ca_file.write(ca.encode())
                 ca_file.flush()
-
-                s3 = self._get_s3_session_resource(s3_parameters, ca_file)
+                s3 = self._get_s3_session_resource(s3_parameters, ca_file.name)
             else:
                 s3 = self._get_s3_session_resource(s3_parameters, None)
 
@@ -533,12 +534,12 @@ Juju Version: {self.charm.model.juju_version!s}
     #         event.fail("Failed to generate backup")
 
     def _upload_images_to_s3(
-        self, ca_file: Any, username: str, s3_path: str, s3_parameters: dict
+        self, ca_file_path: Any, username: str, s3_path: str, s3_parameters: dict
     ) -> bool:
         # get bucket
         bucket_name = s3_parameters["bucket"]
         processed_s3_path = os.path.join(s3_parameters["path"], s3_path).lstrip("/")
-        s3 = self._get_s3_session_resource(ca_file, s3_parameters)
+        s3 = self._get_s3_session_resource(ca_file_path, s3_parameters)
         bucket = s3.Bucket(bucket_name)
 
         # get regions
@@ -620,22 +621,19 @@ Juju Version: {self.charm.model.juju_version!s}
                 ca_file.flush()
 
                 self._upload_images_to_s3(
-                    ca_file=ca_file,
+                    ca_file_path=ca_file.name,
                     username=username,
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
             else:
                 self._upload_images_to_s3(
-                    ca_file=None,
+                    ca_file_path=None,
                     username=username,
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
 
-        # command = [
-        #     # TODO: fill in the details
-        # ]
         return_code, stdout, stderr = self._execute_command(command)
         if return_code != 0:
             logger.error(stderr)
