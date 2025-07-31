@@ -7,7 +7,7 @@ import logging
 import subprocess
 from os import remove
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, List, Union
 
 import yaml
 from charms.operator_libs_linux.v2.snap import SnapCache, SnapState
@@ -232,19 +232,19 @@ class MaasHelper:
         subprocess.check_call(cmd)
 
     @staticmethod
-    def set_prometheus_metrics(admin_username: str, maas_ip: str, enable: bool) -> None:
-        """Enable or disable prometheus metrics for MAAS.
+    def _login_as_admin(admin_username: str, maas_ip: str) -> None:
+        """Login to MAAS as an admin user.
 
         Args:
             admin_username (str): The admin username for MAAS
             maas_ip (str): IP address of the MAAS API
-            enable (bool): True to enable, False to disable
-
         Raises:
-            CalledProcessError: failed to set prometheus_metrics setting
+            CalledProcessError: failed to login
         """
         apikey = (
-            subprocess.check_output(["/snap/bin/maas", "apikey", f"--username={admin_username}"])
+            subprocess.check_output(
+                ["/snap/bin/maas", "apikey", f"--username={admin_username}"]
+            )
             .decode()
             .replace("\n", "")
         )
@@ -256,6 +256,20 @@ class MaasHelper:
             apikey,
         ]
         subprocess.check_call(login_cmd)
+
+    @staticmethod
+    def set_prometheus_metrics(admin_username: str, maas_ip: str, enable: bool) -> None:
+        """Enable or disable prometheus metrics for MAAS.
+
+        Args:
+            admin_username (str): The admin username for MAAS
+            maas_ip (str): IP address of the MAAS API
+            enable (bool): True to enable, False to disable
+
+        Raises:
+            CalledProcessError: failed to set prometheus_metrics setting
+        """
+        MaasHelper._login_as_admin(admin_username, maas_ip)
         set_cmd = [
             "/snap/bin/maas",
             admin_username,
@@ -265,6 +279,39 @@ class MaasHelper:
             f"value={enable}",
         ]
         subprocess.check_call(set_cmd)
+
+    @staticmethod
+    def _call_read_regions(admin_username: str, maas_ip: str) -> str:
+        MaasHelper._login_as_admin(admin_username, maas_ip)
+        cmd = [
+            "/snap/bin/maas",
+            admin_username,
+            "region-controllers",
+            "read",
+            "|",
+            "jq",
+            "-r",
+            ".[].system_id",
+        ]
+        return subprocess.check_output(cmd).decode()
+
+    @staticmethod
+    def get_regions(admin_username: str, maas_ip: str) -> List[str]:
+        """Get the list of region controllers.
+
+        Args:
+            admin_username (str): The admin username for MAAS
+            maas_ip (str): IP address of the MAAS API
+
+        Returns:
+            List[str]: List of region controller system IDs
+
+        Raises:
+            CalledProcessError: failed to read regions from MAAS
+        """
+        return (
+            MaasHelper._call_read_regions(admin_username, maas_ip).strip().splitlines()
+        )
 
     @staticmethod
     def is_tls_enabled() -> Union[bool, None]:

@@ -58,6 +58,29 @@ class ListBackupsError(Exception):
     """Raised when pgBackRest fails to list backups."""
 
 
+def _construct_endpoint(s3_parameters: dict) -> str:
+    """Construct the S3 service endpoint using the region.
+
+    This is needed when the provided endpoint is from AWS, and it doesn't contain the region.
+    """
+    # Use the provided endpoint if a region is not needed.
+    endpoint = s3_parameters["endpoint"]
+
+    # Load endpoints data.
+    loader = loaders.create_loader()
+    data = loader.load_data("endpoints")
+
+    # Construct the endpoint using the region.
+    resolver = EndpointResolver(data)
+    endpoint_data = resolver.construct_endpoint("s3", s3_parameters["region"])
+
+    # Use the built endpoint if it is an AWS endpoint.
+    if endpoint_data and endpoint.endswith(endpoint_data["dnsSuffix"]):
+        endpoint = f"{endpoint.split('://')[0]}://{endpoint_data['hostname']}"
+
+    return endpoint
+
+
 class MAASBackups(Object):
     """In this class, we manage MAASBackups backups."""
 
@@ -121,6 +144,28 @@ class MAASBackups(Object):
 
         return self._are_backup_settings_ok()
 
+    def _create_s3_client(self):
+        """Create an s3 client."""
+        s3_parameters, _ = self._retrieve_s3_parameters()
+        session = Session(
+            aws_access_key_id=s3_parameters["access-key"],
+            aws_secret_access_key=s3_parameters["secret-key"],
+            region_name=s3_parameters["region"],
+        )
+        s3 = session.client(
+            "s3",
+            endpoint_url=_construct_endpoint(s3_parameters),
+            # verify=(s3_parameters["tls-ca-chain"]),
+            verify=False,
+            config=Config(
+                # https://github.com/boto/boto3/issues/4400#issuecomment-2600742103
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            ),
+        )
+
+        return s3
+
     def can_use_s3_repository(self) -> Tuple[bool, Union[str, None]]:
         """Return whether the charm was configured to use another cluster repository."""
         # Check model uuid
@@ -129,7 +174,7 @@ class MAASBackups(Object):
         ca_chain = s3_parameters.get("tls-ca-chain", [])
         with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
             if ca_file:
-                ca = "\n".join([base64.b64decode(s).decode() for s in ca_chain])
+                ca = "\n".join(ca_chain)
                 ca_file.write(ca.encode())
                 ca_file.flush()
 
@@ -709,6 +754,7 @@ Stderr:
 
     def _on_list_backups_action(self, event) -> None:
         """List the previously created backups."""
+        logger.critical("HEY on_list_backups_action called toby")
         are_backup_settings_ok, validation_message = self._are_backup_settings_ok()
         if not are_backup_settings_ok:
             logger.warning(validation_message)
@@ -716,8 +762,24 @@ Stderr:
             return
 
         try:
-            formatted_list = self._generate_backup_list_output()
-            event.set_results({"backups": formatted_list})
+            s3_client = self._create_s3_client()
+            s3_parameters, _ = self._retrieve_s3_parameters()
+            paginator = s3_client.get_paginator("list_objects_v2")
+            page_iterator = paginator.paginate(
+                Bucket=s3_parameters["bucket"],
+                Prefix=f'{s3_parameters["path"].lstrip("/")}/backup/maas.postgresql/',
+                Delimiter="/",
+            )
+            for page in page_iterator:
+                for common_prefix in page.get("CommonPrefixes", []):
+                    logger.critical("HEY this is what you want for list backups:")
+                    logger.critical(
+                        common_prefix["Prefix"]
+                        .lstrip(
+                            f'{s3_parameters["path"].lstrip("/")}/backup/maas.postgresql/'
+                        )
+                        .rstrip("/")
+                    )
         except ListBackupsError as e:
             logger.exception(e)
             event.fail(f"Failed to list MAAS backups with error: {e!s}")
