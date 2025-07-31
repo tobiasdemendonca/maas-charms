@@ -95,7 +95,7 @@ actions:
           differential takes a copy of only changed data since the last full backup,
           and incremental is a copy of data changed since the last backup.
           possible values - full, differential, incremental.
-  restore:
+  restore-from-backup:
     description: Restore from a MAAS backup
       NOTE - This is a noop action, and serves only as a placeholder
     params:
