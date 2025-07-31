@@ -25,16 +25,16 @@ from charms.data_platform_libs.v0.s3 import (
     CredentialsChangedEvent,
     S3Requirer,
 )
-from ops.charm import ActionEvent
-from ops.framework import Object
-from ops.model import ActiveStatus, MaintenanceStatus
-
 from constants import (
     BACKUP_ID_FORMAT,
     PGBACKREST_BACKUP_ID_FORMAT,
     PGBACKREST_CONFIGURATION_FILE,
     PGBACKREST_EXECUTABLE,
 )
+from ops.charm import ActionEvent
+from ops.framework import Object
+from ops.model import ActiveStatus, MaintenanceStatus
+
 from helper import MaasHelper
 
 if TYPE_CHECKING:
@@ -615,7 +615,7 @@ Juju Version: {self.charm.model.juju_version!s}
         ca_chain = s3_parameters.get("tls-ca-chain", [])
         with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
             if ca_file:
-                ca = "\n".join([base64.b64decode(s).decode() for s in ca_chain])
+                ca = "\n".join(ca_chain)
                 ca_file.write(ca.encode())
                 ca_file.flush()
 
@@ -726,7 +726,6 @@ Stderr:
 
     def _on_list_backups_action(self, event) -> None:
         """List the previously created backups."""
-        logger.critical("HEY on_list_backups_action called toby")
         are_backup_settings_ok, validation_message = self._are_backup_settings_ok()
         if not are_backup_settings_ok:
             logger.warning(validation_message)
@@ -744,7 +743,9 @@ Stderr:
             )
             for page in page_iterator:
                 for common_prefix in page.get("CommonPrefixes", []):
-                    logger.critical("HEY this is what you want for list backups:")
+                    logger.critical(
+                        "HEY this is what you want for list backups (and this works):"
+                    )
                     logger.critical(
                         common_prefix["Prefix"]
                         .lstrip(
