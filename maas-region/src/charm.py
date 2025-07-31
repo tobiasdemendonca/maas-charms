@@ -234,6 +234,11 @@ class MaasRegionCharm(ops.CharmBase):
         """
         return MaasHelper.get_maas_id()
 
+    @property
+    def is_blocked(self) -> bool:
+        """If the unit is in a blocked state."""
+        return isinstance(self.unit.status, ops.BlockedStatus)
+
     def get_operational_mode(self) -> str:
         """Get expected MAAS mode.
 
