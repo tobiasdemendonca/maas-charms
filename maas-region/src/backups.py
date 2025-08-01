@@ -533,7 +533,7 @@ Juju Version: {self.charm.model.juju_version!s}
     #     except subprocess.CalledProcessError:
     #         event.fail("Failed to generate backup")
 
-    def _upload_images_to_s3(
+    def _archive_and_upload_to_s3(
         self, ca_file_path: Any, username: str, s3_path: str, s3_parameters: dict
     ) -> bool:
         # get bucket
@@ -621,106 +621,117 @@ Juju Version: {self.charm.model.juju_version!s}
                 ca_file.write(ca.encode())
                 ca_file.flush()
 
-                self._upload_images_to_s3(
+                succeeded = self._archive_and_upload_to_s3(
                     ca_file_path=ca_file.name,
                     username=username,
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
             else:
-                self._upload_images_to_s3(
+                succeeded = self._archive_and_upload_to_s3(
                     ca_file_path=None,
                     username=username,
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
-        return_code, stdout, stderr = self._execute_command(command)
-        if return_code != 0:
-            logger.error(stderr)
-
-            # Recover the backup id from the logs.
-            backup_label_stdout_line = re.findall(
-                r"(new backup label = )([0-9]{8}[-][0-9]{6}[F])$", stdout, re.MULTILINE
-            )
-            if len(backup_label_stdout_line) > 0:
-                backup_id = backup_label_stdout_line[0][1]
-            else:
-                # Generate a backup id from the current date and time if the backup failed before
-                # generating the backup label (our backup id).
-                backup_id = self._generate_backup_id()
-
-            # Upload the logs to S3.
-            logs = f"""Stdout:
-{stdout}
-
-Stderr:
-{stderr}
-"""
-            ca_chain = s3_parameters.get("tls-ca-chain", [])
-            with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
-                if ca_file:
-                    ca = "\n".join(ca_chain)
-                    ca_file.write(ca.encode())
-                    ca_file.flush()
-
-                    s3 = self._get_s3_session_resource(s3_parameters, ca_file)
-                else:
-                    s3 = self._get_s3_session_resource(s3_parameters, None)
-
-                self._upload_content_to_s3(
-                    logs,
-                    os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
-                        "/"
-                    ),
-                    s3_parameters["bucket"],
-                    s3,
-                )
-
-            error_message = f"Failed to backup MAAS with error: {stderr}"
+        if not succeeded:
+            # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
+            error_message = "Failed to archive and upload images to S3"
             logger.error(f"Backup failed: {error_message}")
             event.fail(error_message)
+            return
         else:
-            try:
-                backup_id = self._list_backups(s3_parameters)[-1]
-            except ListBackupsError as e:
-                logger.exception(e)
-                error_message = "Failed to retrieve backup id"
-                logger.error(f"Backup failed: {error_message}")
-                event.fail(error_message)
-                return
+            # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
+            logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
+            event.set_results({"backup-status": "backup created"})
 
-            # Upload the logs to S3 and fail the action if it doesn't succeed.
-            logs = f"""Stdout:
-{stdout}
+    #         return_code, stdout, stderr = self._execute_command(command)
+    #         if return_code != 0:
+    #             logger.error(stderr)
 
-Stderr:
-{stderr}
-"""
-            ca_chain = s3_parameters.get("tls-ca-chain", [])
-            with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
-                if ca_file:
-                    ca = "\n".join(ca_chain)
-                    ca_file.write(ca.encode())
-                    ca_file.flush()
+    #             # Recover the backup id from the logs.
+    #             backup_label_stdout_line = re.findall(
+    #                 r"(new backup label = )([0-9]{8}[-][0-9]{6}[F])$", stdout, re.MULTILINE
+    #             )
+    #             if len(backup_label_stdout_line) > 0:
+    #                 backup_id = backup_label_stdout_line[0][1]
+    #             else:
+    #                 # Generate a backup id from the current date and time if the backup failed before
+    #                 # generating the backup label (our backup id).
+    #                 backup_id = self._generate_backup_id()
 
-                    s3 = self._get_s3_session_resource(s3_parameters, ca_file)
-                else:
-                    s3 = self._get_s3_session_resource(s3_parameters, None)
+    #             # Upload the logs to S3.
+    #             logs = f"""Stdout:
+    # {stdout}
 
-                if not self._upload_content_to_s3(
-                    logs,
-                    os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
-                        "/"
-                    ),
-                    s3_parameters["bucket"],
-                    s3,
-                ):
-                    error_message = "Error uploading logs to S3"
-                    logger.error(f"Backup failed: {error_message}")
-                    event.fail(error_message)
-                else:
-                    logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
-                    event.set_results({"backup-status": "backup created"})
+    # Stderr:
+    # {stderr}
+    # """
+    #             ca_chain = s3_parameters.get("tls-ca-chain", [])
+    #             with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
+    #                 if ca_file:
+    #                     ca = "\n".join(ca_chain)
+    #                     ca_file.write(ca.encode())
+    #                     ca_file.flush()
+
+    #                     s3 = self._get_s3_session_resource(s3_parameters, ca_file)
+    #                 else:
+    #                     s3 = self._get_s3_session_resource(s3_parameters, None)
+
+    #                 self._upload_content_to_s3(
+    #                     logs,
+    #                     os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
+    #                         "/"
+    #                     ),
+    #                     s3_parameters["bucket"],
+    #                     s3,
+    #                 )
+
+    #             error_message = f"Failed to backup MAAS with error: {stderr}"
+    #             logger.error(f"Backup failed: {error_message}")
+    #             event.fail(error_message)
+    #         else:
+    #             try:
+    #                 backup_id = self._list_backups(s3_parameters)[-1]
+    #             except ListBackupsError as e:
+    #                 logger.exception(e)
+    #                 error_message = "Failed to retrieve backup id"
+    #                 logger.error(f"Backup failed: {error_message}")
+    #                 event.fail(error_message)
+    #                 return
+
+    #             # Upload the logs to S3 and fail the action if it doesn't succeed.
+    #             logs = f"""Stdout:
+    # {stdout}
+
+    # Stderr:
+    # {stderr}
+    # """
+    #             ca_chain = s3_parameters.get("tls-ca-chain", [])
+    #             with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
+    #                 if ca_file:
+    #                     ca = "\n".join(ca_chain)
+    #                     ca_file.write(ca.encode())
+    #                     ca_file.flush()
+
+    #                     s3 = self._get_s3_session_resource(s3_parameters, ca_file)
+    #                 else:
+    #                     s3 = self._get_s3_session_resource(s3_parameters, None)
+
+    #                 if not self._upload_content_to_s3(
+    #                     logs,
+    #                     os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
+    #                         "/"
+    #                     ),
+    #                     s3_parameters["bucket"],
+    #                     s3,
+    #                 ):
+    #                     error_message = "Error uploading logs to S3"
+    #                     logger.error(f"Backup failed: {error_message}")
+    #                     event.fail(error_message)
+    #                 else:
+    #                     logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
+    #                     event.set_results({"backup-status": "backup created"})
 
     def _on_list_backups_action(self, event) -> None:
         """List the previously created backups."""
