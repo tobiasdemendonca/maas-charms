@@ -538,7 +538,6 @@ Juju Version: {self.charm.model.juju_version!s}
     ) -> bool:
         # get bucket
         bucket_name = s3_parameters["bucket"]
-        processed_s3_path = os.path.join(s3_parameters["path"], s3_path).lstrip("/")
         s3 = self._get_s3_session_resource(s3_parameters, ca_file_path)
         bucket = s3.Bucket(bucket_name)
 
@@ -555,7 +554,7 @@ Juju Version: {self.charm.model.juju_version!s}
 
         # upload regions
         try:
-            region_path = os.path.join(processed_s3_path, "controllers.txt")
+            region_path = os.path.join(s3_path, "controllers.txt")
             with tempfile.NamedTemporaryFile(suffix=".txt") as f:
                 f.write("\n".join(regions).encode("utf-8"))
                 f.flush()
@@ -563,7 +562,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 bucket.upload_file(f.name, region_path)
         except Exception as e:
             logger.exception(
-                f"Failed to upload region ids to S3 bucket={bucket_name}, path={processed_s3_path}",
+                f"Failed to upload region ids to S3 bucket={bucket_name}, path={s3_path}",
                 exc_info=e,
             )
             self.charm.unit.status = ops.BlockedStatus(
@@ -573,7 +572,7 @@ Juju Version: {self.charm.model.juju_version!s}
 
         # zip and upload images
         try:
-            image_path = os.path.join(processed_s3_path, "images-storage.tar.gz")
+            image_path = os.path.join(s3_path, "images-storage.tar.gz")
             self.charm.unit.status = MaintenanceStatus(
                 "Creating image archive for S3 backup"
             )
@@ -593,7 +592,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 bucket.upload_file(f.name, image_path)
         except Exception as e:
             logger.exception(
-                f"Failed to create image archive for S3 backup in bucket={bucket_name}, path={processed_s3_path}",
+                f"Failed to create image archive for S3 backup in bucket={bucket_name}, path={s3_path}",
                 exc_info=e,
             )
             self.charm.unit.status = ops.BlockedStatus(
@@ -635,7 +634,6 @@ Juju Version: {self.charm.model.juju_version!s}
                     s3_path=s3_path,
                     s3_parameters=s3_parameters,
                 )
-        logging.critical("Passed the upload stage")
         return_code, stdout, stderr = self._execute_command(command)
         if return_code != 0:
             logger.error(stderr)
