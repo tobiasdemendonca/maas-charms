@@ -534,7 +534,12 @@ Juju Version: {self.charm.model.juju_version!s}
     #         event.fail("Failed to generate backup")
 
     def _archive_and_upload_to_s3(
-        self, ca_file_path: Any, username: str, s3_path: str, s3_parameters: dict
+        self,
+        event: ActionEvent,
+        ca_file_path: Any,
+        username: str,
+        s3_path: str,
+        s3_parameters: dict,
     ) -> bool:
         # get bucket
         bucket_name = s3_parameters["bucket"]
@@ -542,7 +547,7 @@ Juju Version: {self.charm.model.juju_version!s}
         bucket = s3.Bucket(bucket_name)
 
         # get regions
-        logger.critical("About to get regions")
+        event.log("Retrieving region ids from MAAS...")
         success, regions = self._get_region_ids(username=username)
         logger.critical(f"Regions {regions}")
         if not success:
@@ -558,7 +563,7 @@ Juju Version: {self.charm.model.juju_version!s}
             with tempfile.NamedTemporaryFile(suffix=".txt") as f:
                 f.write("\n".join(regions).encode("utf-8"))
                 f.flush()
-                self.charm.unit.status = MaintenanceStatus("Uploading region ids to S3")
+                event.log("Uploading region ids to S3...")
                 bucket.upload_file(f.name, region_path)
         except Exception as e:
             logger.exception(
@@ -573,22 +578,15 @@ Juju Version: {self.charm.model.juju_version!s}
         # zip and upload images
         try:
             image_path = os.path.join(s3_path, "images-storage.tar.gz")
-            self.charm.unit.status = MaintenanceStatus(
-                "Creating image archive for S3 backup"
-            )
             with tempfile.NamedTemporaryFile(suffix=".tar.gz") as f:
-                self.charm.unit.status = MaintenanceStatus(
-                    "Creating image archive for S3 backup..."
-                )
+                event.log("Creating image archive for S3 backup...")
                 with tarfile.open(fileobj=f, mode="w:gz") as tar:
                     tar.add(
                         "/var/snap/maas/common/maas/image-storage",
                         arcname="images-storage",
                     )
                 f.flush()
-                self.charm.unit.status = MaintenanceStatus(
-                    "Uploading image archive to S3"
-                )
+                event.log("Uploading image archive to S3...")
                 bucket.upload_file(f.name, image_path)
         except Exception as e:
             logger.exception(
@@ -622,6 +620,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 ca_file.flush()
 
                 succeeded = self._archive_and_upload_to_s3(
+                    event=event,
                     ca_file_path=ca_file.name,
                     username=username,
                     s3_path=s3_path,
@@ -629,6 +628,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 )
             else:
                 succeeded = self._archive_and_upload_to_s3(
+                    event=event,
                     ca_file_path=None,
                     username=username,
                     s3_path=s3_path,
@@ -643,7 +643,7 @@ Juju Version: {self.charm.model.juju_version!s}
         else:
             # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
             logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
-            event.set_results({"backup-status": "backup created"})
+            event.set_results({"backup-status": f"backup created with id {backup_id}"})
 
     #         return_code, stdout, stderr = self._execute_command(command)
     #         if return_code != 0:
