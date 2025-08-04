@@ -288,6 +288,7 @@ class MAASBackups(Object):
 
     def _on_create_backup_action(self, event) -> None:
         logger.info("A backup has been requested on unit")
+        username = event.params["username"]
         can_unit_perform_backup, validation_message = self._can_unit_perform_backup()
         if not can_unit_perform_backup:
             logger.error(f"Backup failed: {validation_message}")
@@ -305,27 +306,17 @@ Application Name: {self.model.app.name}
 Unit Name: {self.charm.unit.name}
 Juju Version: {self.charm.model.juju_version!s}
 """
-        ca_chain = s3_parameters.get("tls-ca-chain", [])
-        logging.info("Uploading metadata to S3")
-        with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
-            if ca_file:
-                ca = "\n".join(ca_chain)
-                ca_file.write(ca.encode())
-                ca_file.flush()
-                s3 = self._get_s3_session_resource(s3_parameters, ca_file.name)
-            else:
-                s3 = self._get_s3_session_resource(s3_parameters, None)
 
-            if not self._upload_content_to_s3(
-                metadata,
-                os.path.join(s3_parameters["path"], "backup/latest").lstrip("/"),
-                s3_parameters["bucket"],
-                s3,
-            ):
-                error_message = "Failed to upload metadata to provided S3"
-                logger.error(f"Backup failed: {error_message}")
-                event.fail(error_message)
-                return
+        logging.info("Uploading metadata to S3")
+        if not self._upload_content_to_s3(
+            metadata,
+            os.path.join(s3_parameters["path"], "backup/latest").lstrip("/"),
+            s3_parameters,
+        ):
+            error_message = "Failed to upload metadata to provided S3"
+            logger.error(f"Backup failed: {error_message}")
+            event.fail(error_message)
+            return
 
         self.charm.unit.status = MaintenanceStatus("creating backup")
 
@@ -570,6 +561,9 @@ Juju Version: {self.charm.model.juju_version!s}
     #                 else:
     #                     logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
     #                     event.set_results({"backup-status": "backup created"})
+    def _generate_backup_id(self) -> str:
+        """Create a backup id for failed backup operations (to store log file)."""
+        return datetime.strftime(datetime.now(), BACKUP_ID_FORMAT)
 
     def _on_list_backups_action(self, event) -> None:
         """List the previously created backups."""

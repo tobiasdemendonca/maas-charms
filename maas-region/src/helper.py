@@ -310,7 +310,7 @@ class MaasHelper:
         return {region["system_id"] for region in region_data}
 
     @staticmethod
-    def is_tls_enabled() -> Union[bool, None]:
+    def is_tls_enabled() -> bool | None:
         """Check whether MAAS currently has TLS enabled.
 
         Returns:
