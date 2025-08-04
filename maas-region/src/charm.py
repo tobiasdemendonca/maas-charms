@@ -10,7 +10,7 @@ import random
 import socket
 import string
 import subprocess
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import ops
 import yaml
@@ -159,7 +159,12 @@ class MaasRegionCharm(ops.CharmBase):
         self.framework.observe(self.on.config_changed, self._on_config_changed)
 
     @property
-    def peers(self) -> Union[ops.Relation, None]:
+    def is_blocked(self) -> bool:
+        """If the unit is in a blocked state."""
+        return isinstance(self.unit.status, ops.BlockedStatus)
+
+    @property
+    def peers(self) -> ops.Relation | None:
         """Fetch the peer relation."""
         return self.model.get_relation(MAAS_PEER_NAME)
 
@@ -181,7 +186,7 @@ class MaasRegionCharm(ops.CharmBase):
         return f"postgres://{username}:{password}@{endpoints}/{self.maasdb_name}"
 
     @property
-    def version(self) -> Union[str, None]:
+    def version(self) -> str | None:
         """Reports the current workload version.
 
         Returns:
@@ -190,7 +195,7 @@ class MaasRegionCharm(ops.CharmBase):
         return MaasHelper.get_installed_version()
 
     @property
-    def enrollment_token(self) -> Union[str, None]:
+    def enrollment_token(self) -> str | None:
         """Reports the enrollment token.
 
         Returns:
@@ -226,7 +231,7 @@ class MaasRegionCharm(ops.CharmBase):
         return f"http://{self.bind_address}:{MAAS_HTTP_PORT}/MAAS"
 
     @property
-    def maas_id(self) -> Union[str, None]:
+    def maas_id(self) -> str | None:
         """Reports the MAAS ID.
 
         Returns:
@@ -248,15 +253,13 @@ class MaasRegionCharm(ops.CharmBase):
         has_agent = self.maas_region.gather_rack_units().get(socket.gethostname())
         return "region+rack" if has_agent else "region"
 
-    def set_peer_data(
-        self, app_or_unit: Union[ops.Application, ops.Unit], key: str, data: Any
-    ) -> None:
+    def set_peer_data(self, app_or_unit: ops.Application | ops.Unit, key: str, data: Any) -> None:
         """Put information into the peer data bucket."""
         if not self.peers:
             return
         self.peers.data[app_or_unit][key] = json.dumps(data or {})
 
-    def get_peer_data(self, app_or_unit: Union[ops.Application, ops.Unit], key: str) -> Any:
+    def get_peer_data(self, app_or_unit: ops.Application | ops.Unit, key: str) -> Any:
         """Retrieve information from the peer data bucket."""
         if not self.peers:
             return {}
@@ -276,7 +279,7 @@ class MaasRegionCharm(ops.CharmBase):
             return False
         return True
 
-    def _create_or_get_internal_admin(self) -> Dict[str, str]:
+    def _create_or_get_internal_admin(self) -> dict[str, str]:
         """Create an internal admin user if one does not already exist.
 
         Store the credentials in a secret, and return the credentials.
@@ -331,7 +334,7 @@ class MaasRegionCharm(ops.CharmBase):
             return True
         return False
 
-    def _get_regions(self) -> List[str]:
+    def _get_regions(self) -> list[str]:
         eps = [socket.gethostname()]
         if peers := self.peers:
             for u in peers.units:
