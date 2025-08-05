@@ -6,7 +6,6 @@
 import logging
 import os
 import subprocess
-import sys
 import tarfile
 import tempfile
 import threading
@@ -49,6 +48,7 @@ S3_BLOCK_MESSAGES = [
 SNAP_PATH_TO_IMAGES = "/var/snap/maas/common/maas/image-storage"
 METADATA_PATH = "backup/latest"
 
+
 class ProgressPercentage:
     """Class to track the progress of a file upload to S3."""
 
@@ -66,9 +66,7 @@ class ProgressPercentage:
         with self._lock:
             self._seen_so_far += bytes_amount
             percentage = (self._seen_so_far / self._size) * 100
-            if (
-                percentage - self._last_percentage
-            ) >= self._update_interval or percentage >= 100:
+            if (percentage - self._last_percentage) >= self._update_interval or percentage >= 100:
                 self._last_percentage = percentage
                 logger.info(f"uploading {self._log_label} to s3: {percentage:.2f}%")
 

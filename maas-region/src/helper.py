@@ -242,9 +242,7 @@ class MaasHelper:
             CalledProcessError: failed to login
         """
         apikey = (
-            subprocess.check_output(
-                ["/snap/bin/maas", "apikey", f"--username={admin_username}"]
-            )
+            subprocess.check_output(["/snap/bin/maas", "apikey", f"--username={admin_username}"])
             .decode()
             .replace("\n", "")
         )
