@@ -16,23 +16,30 @@ from io import BytesIO
 from subprocess import run
 from typing import Any
 
-import ops
 from boto3.session import Session
 from botocore import loaders
 from botocore.client import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    ConnectTimeoutError,
+    ParamValidationError,
+    SSLError,
+)
 from botocore.regions import EndpointResolver
-from charms.data_platform_libs.v0.s3 import CredentialsChangedEvent, S3Requirer
+from charms.data_platform_libs.v0.s3 import (
+    CredentialsChangedEvent,
+    S3Requirer,
+)
 from ops.charm import ActionEvent
 from ops.framework import Object
-from ops.model import ActiveStatus, MaintenanceStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
 
 from helper import MaasHelper
 
 logger = logging.getLogger(__name__)
 
 BACKUP_ID_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-ANOTHER_CLUSTER_REPOSITORY_ERROR_MESSAGE = "the S3 repository has backups from another cluster"
 FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE = (
     "failed to access/create the bucket, check your S3 settings"
 )
@@ -90,7 +97,9 @@ class MAASBackups(Object):
             self.charm.on.restore_from_backup_action, self._on_restore_from_backup_action
         )
 
-    def _get_s3_session_resource(self, s3_parameters: dict, ca_file: Any) -> Any:
+    def _get_s3_session_resource(
+        self, s3_parameters: dict[str, str], ca_file_path: str | None
+    ) -> Any:
         session = Session(
             aws_access_key_id=s3_parameters["access-key"],
             aws_secret_access_key=s3_parameters["secret-key"],
@@ -99,7 +108,7 @@ class MAASBackups(Object):
         return session.resource(
             "s3",
             endpoint_url=self._construct_endpoint(s3_parameters),
-            verify=(ca_file),
+            verify=(ca_file_path),
             config=Config(
                 # https://github.com/boto/boto3/issues/4400#issuecomment-2600742103
                 request_checksum_calculation="when_required",
@@ -107,7 +116,9 @@ class MAASBackups(Object):
             ),
         )
 
-    def _get_s3_session_client(self, s3_parameters: dict, ca_file: Any) -> Any:
+    def _get_s3_session_client(
+        self, s3_parameters: dict[str, str], ca_file_path: str | None
+    ) -> Any:
         session = Session(
             aws_access_key_id=s3_parameters["access-key"],
             aws_secret_access_key=s3_parameters["secret-key"],
@@ -116,7 +127,7 @@ class MAASBackups(Object):
         return session.client(
             "s3",
             endpoint_url=self._construct_endpoint(s3_parameters),
-            verify=(ca_file),
+            verify=(ca_file_path),
             config=Config(
                 # https://github.com/boto/boto3/issues/4400#issuecomment-2600742103
                 request_checksum_calculation="when_required",
@@ -138,7 +149,7 @@ class MAASBackups(Object):
 
         return True, ""
 
-    def _can_unit_perform_backup(self) -> tuple[bool, str | None]:
+    def _can_unit_perform_backup(self) -> tuple[bool, str]:
         """Validate whether this unit can perform a backup."""
         if not self.charm.unit.is_leader():
             return False, "Unit is not the leader"
@@ -148,7 +159,7 @@ class MAASBackups(Object):
 
         return self._are_backup_settings_ok()
 
-    def can_use_s3_repository(self) -> tuple[bool, str | None]:
+    def _can_use_s3_repository(self) -> tuple[bool, str]:
         """Return whether the charm was configured to use another cluster repository."""
         # Check model uuid
         s3_parameters, _ = self._retrieve_s3_parameters()
@@ -161,11 +172,11 @@ class MAASBackups(Object):
             logger.debug(
                 f"can_use_s3_repository: incompatible model-uuid s3={s3_model_uuid.strip()}, local={self.model.uuid}"
             )
-            return False, ANOTHER_CLUSTER_REPOSITORY_ERROR_MESSAGE
+            return False, "the S3 repository has backups from another cluster"
 
-        return True, None
+        return True, ""
 
-    def _construct_endpoint(self, s3_parameters: dict) -> str:
+    def _construct_endpoint(self, s3_parameters: dict[str, str]) -> str:
         """Construct the S3 service endpoint using the region.
 
         This is needed when the provided endpoint is from AWS, and it doesn't contain the region.
@@ -187,6 +198,71 @@ class MAASBackups(Object):
 
         return endpoint
 
+    def _create_bucket_if_not_exists(self, s3_parameters: dict[str, str]) -> None:
+        bucket_name = s3_parameters["bucket"]
+        region = s3_parameters.get("region")
+
+        ca_chain = s3_parameters.get("tls-ca-chain", [])
+        with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
+            if ca_file:
+                ca = "\n".join(ca_chain)
+                ca_file.write(ca.encode())
+                ca_file.flush()
+
+                s3 = self._get_s3_session_resource(s3_parameters, ca_file.name)
+            else:
+                s3 = self._get_s3_session_resource(s3_parameters, None)
+
+            bucket = s3.Bucket(bucket_name)
+            try:
+                bucket.meta.client.head_bucket(Bucket=bucket_name)
+                logger.info("Bucket %s exists.", bucket_name)
+                exists = True
+            except ConnectTimeoutError as e:
+                # Re-raise the error if the connection timeouts, so the user has the possibility to
+                # fix network issues and call juju resolve to re-trigger the hook that calls
+                # this method.
+                logger.error(
+                    f"error: {e!s} - please fix the error and call juju resolve on this unit"
+                )
+                raise e
+            except ClientError:
+                logger.warning(
+                    "Bucket %s doesn't exist or you don't have access to it.", bucket_name
+                )
+                exists = False
+            except SSLError as e:
+                logger.error(f"error: {e!s} - Is TLS enabled and CA chain set on S3?")
+                raise e
+            if exists:
+                return
+
+            try:
+                bucket.create(CreateBucketConfiguration={"LocationConstraint": region})
+
+                bucket.wait_until_exists()
+                logger.info("Created bucket '%s' in region=%s", bucket_name, region)
+            except ClientError as error:
+                if error.response["Error"]["Code"] == "InvalidLocationConstraint":
+                    logger.info(
+                        "Specified location-constraint is not valid, trying create without it"
+                    )
+                    try:
+                        bucket.create()
+
+                        bucket.wait_until_exists()
+                        logger.info("Created bucket '%s', ignored region=%s", bucket_name, region)
+                    except ClientError as error:
+                        logger.exception(
+                            "Couldn't create bucket named '%s' in region=%s.", bucket_name, region
+                        )
+                        raise error
+                else:
+                    logger.exception(
+                        "Couldn't create bucket named '%s' in region=%s.", bucket_name, region
+                    )
+                    raise error
+
     def _execute_command(
         self,
         command: list[str],
@@ -203,7 +279,12 @@ class MAASBackups(Object):
         )
         return process.returncode, process.stdout.decode(), process.stderr.decode()
 
-    def _format_backup_list(self, backup_list, s3_bucket, s3_path) -> str:
+    def _format_backup_list(
+        self,
+        backup_list: list[tuple[str, str, str, str]],
+        s3_bucket: str,
+        s3_path: str,
+    ) -> str:
         """Format provided list of backups as a table."""
         backups = [
             f"Storage bucket name: {s3_bucket:s}",
@@ -230,12 +311,14 @@ class MAASBackups(Object):
     def _generate_backup_list_output(self) -> str:
         """Generate a list of backups in a formatted table.
 
-        List contains successful and failed backups in order of ascending time.
+        List contains successful backups in order of ascending time.
         """
         s3_parameters, _ = self._retrieve_s3_parameters()
         backups = self._list_backups(s3_parameters)
         backup_list = []
         for backup in backups:
+            # TODO: backup_action and backup_status are statically set for now. They can be enriched
+            # with extra content if such functionality is added to the backup mechanism.
             backup_action = "full backup"
             backup_path = f"/{s3_parameters['path'].lstrip('/')}/backup/{backup['id']}"
             backup_status = "finished"
@@ -298,6 +381,17 @@ class MAASBackups(Object):
         s3_parameters, _ = self._retrieve_s3_parameters()
         if not s3_parameters:
             event.defer()
+            return
+
+        try:
+            self._create_bucket_if_not_exists(s3_parameters)
+        except (ClientError, ValueError, ParamValidationError, SSLError):
+            self.charm.unit.status = BlockedStatus(FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE)
+            return
+
+        can_use_s3_repository, validation_message = self._can_use_s3_repository()
+        if not can_use_s3_repository:
+            self.charm.unit.status = BlockedStatus(validation_message)
             return
 
         self._upload_content_to_s3(
@@ -556,7 +650,7 @@ Juju Version: {self.charm.model.juju_version!s}
 
         return True
 
-    def _retrieve_s3_parameters(self) -> tuple[dict, list[str]]:
+    def _retrieve_s3_parameters(self) -> tuple[dict[str, str], list[str]]:
         """Retrieve S3 parameters from the S3 integrator relation."""
         s3_parameters = self.s3_client.get_s3_connection_info()
         required_parameters = [
@@ -593,7 +687,9 @@ Juju Version: {self.charm.model.juju_version!s}
 
         return s3_parameters, []
 
-    def _upload_content_to_s3(self, content: str, s3_path: str, s3_parameters: dict) -> bool:
+    def _upload_content_to_s3(
+        self, content: str, s3_path: str, s3_parameters: dict[str, str]
+    ) -> bool:
         """Upload the provided contents to the provided S3 bucket relative to the path from the S3 config.
 
         Args:
@@ -634,7 +730,7 @@ Juju Version: {self.charm.model.juju_version!s}
 
         return True
 
-    def _read_content_from_s3(self, s3_path: str, s3_parameters: dict) -> str | None:
+    def _read_content_from_s3(self, s3_path: str, s3_parameters: dict[str, str]) -> str | None:
         """Read specified content from the provided S3 bucket relative to the path from the S3 config.
 
         Args:
