@@ -39,7 +39,8 @@ FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE = (
 S3_BLOCK_MESSAGES = [
     FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE,
 ]
-
+SNAP_PATH_TO_IMAGES = "/var/snap/maas/common/maas/image-storage"
+METADATA_PATH = "backup/latest"
 
 class ProgressPercentage:
     """Class to track the progress of a file upload to S3."""
@@ -310,7 +311,11 @@ class MAASBackups(Object):
             self.charm.unit.status(ActiveStatus())
 
     def _on_create_backup_action(self, event) -> None:
-        username = event.params["username"]
+        username = event.params.get("username")
+        if not username:
+            event.fail("username parameter is required")
+            return
+
         can_unit_perform_backup, validation_message = self._can_unit_perform_backup()
         if not can_unit_perform_backup:
             logger.error(f"Backup failed: {validation_message}")
@@ -330,10 +335,10 @@ Juju Version: {self.charm.model.juju_version!s}
         s3_parameters, _ = self._retrieve_s3_parameters()
         if not self._upload_content_to_s3(
             metadata,
-            os.path.join(s3_parameters["path"], "backup/latest").lstrip("/"),
+            os.path.join(s3_parameters["path"], METADATA_PATH).lstrip("/"),
             s3_parameters,
         ):
-            error_message = "Failed to upload metadata to provided S3"
+            error_message = "Failed to upload metadata to provided S3. Please check the juju debug-log for more details."
             logger.error(f"Backup failed: {error_message}")
             event.fail(error_message)
             return
@@ -373,7 +378,7 @@ Juju Version: {self.charm.model.juju_version!s}
             )
         if not succeeded:
             # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
-            error_message = "Failed to archive and upload MAAS files to S3"
+            error_message = "Failed to archive and upload MAAS files to S3. Please check the juju debug-log for more details."
             logger.error(f"Backup failed: {error_message}")
             event.fail(error_message)
             return
@@ -393,11 +398,12 @@ Juju Version: {self.charm.model.juju_version!s}
         # get regions
         event.log("Retrieving region ids from MAAS...")
         success, regions = self._get_region_ids(username=username)
-        logger.critical(f"Regions {regions}")
         if not success:
-            logger.error("Failed to get region ids for S3 backup")
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to get region ids for S3 backup"
+            logger.error(
+                "Failed to get region ids for S3 backup. Please check the juju debug-log for more details."
+            )
+            event.fail(
+                "Failed to get region ids for S3 backup. Please check the juju debug-log for more details."
             )
             return False
 
@@ -419,8 +425,8 @@ Juju Version: {self.charm.model.juju_version!s}
                 f"Failed to upload region ids to S3 bucket={bucket_name}, path={s3_path}",
                 exc_info=e,
             )
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to upload region ids to S3 backup"
+            event.fail(
+                "Failed to upload region ids to S3 backup. Please check the juju debug-log for more details."
             )
             return False
 
@@ -431,7 +437,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 event.log("Creating image archive for S3 backup...")
                 with tarfile.open(fileobj=f, mode="w:gz") as tar:
                     tar.add(
-                        "/var/snap/maas/common/maas/image-storage",
+                        SNAP_PATH_TO_IMAGES,
                         arcname="images-storage",
                     )
                 f.flush()
@@ -447,9 +453,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 f"Failed to create image archive for S3 backup in bucket={bucket_name}, path={s3_path}",
                 exc_info=e,
             )
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to create image archive for S3 backup"
-            )
+            event.fail("Failed to create image archive for S3 backup")
             return False
 
         return True
