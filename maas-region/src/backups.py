@@ -55,7 +55,6 @@ class ProgressPercentage:
 
     def __call__(self, bytes_amount: int):
         """Track the progress of the upload as a callback."""
-        # To simplify, assume this is hooked up to a single filename
         with self._lock:
             self._seen_so_far += bytes_amount
             percentage = (self._seen_so_far / self._size) * 100
