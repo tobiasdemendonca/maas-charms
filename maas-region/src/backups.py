@@ -6,8 +6,10 @@
 import logging
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
+import threading
 from contextlib import nullcontext
 from datetime import datetime
 from io import BytesIO
@@ -20,10 +22,7 @@ from botocore import loaders
 from botocore.client import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from botocore.regions import EndpointResolver
-from charms.data_platform_libs.v0.s3 import (
-    CredentialsChangedEvent,
-    S3Requirer,
-)
+from charms.data_platform_libs.v0.s3 import CredentialsChangedEvent, S3Requirer
 from ops.charm import ActionEvent
 from ops.framework import Object
 from ops.model import ActiveStatus, MaintenanceStatus
@@ -40,6 +39,33 @@ FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE = (
 S3_BLOCK_MESSAGES = [
     FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE,
 ]
+
+
+class ProgressPercentage:
+    """Class to track the progress of a file upload to S3."""
+
+    def __init__(self, filename: str, event: ActionEvent, update_interval: int = 10):
+        self._filename = filename
+        self._size = float(os.path.getsize(filename))
+        self._seen_so_far = 0
+        self._lock = threading.Lock()
+        self._update_interval = update_interval
+        self._event = event
+        self._last_percentage = 0
+
+    def __call__(self, bytes_amount: int):
+        """Track the progress of the upload as a callback."""
+        # To simplify, assume this is hooked up to a single filename
+        with self._lock:
+            self._seen_so_far += bytes_amount
+            percentage = (self._seen_so_far / self._size) * 100
+            if (
+                percentage - self._last_percentage
+            ) >= self._update_interval or percentage >= 100:
+                self._last_percentage = percentage
+                self._event.set_results(
+                    {"backup-status": f"File upload at {percentage:.2f}%"}
+                )
 
 
 class MAASBackups(Object):
@@ -333,102 +359,6 @@ Juju Version: {self.charm.model.juju_version!s}
             logger.error(f"Failed to get region ids: {e}")
             return False, set()
 
-    #  def _on_create_backup_action_jack(self, event: ops.ActionEvent) -> None:
-    #     """Create a MAAS backup, returning the backup-id."""
-    #     username = event.params["username"]
-    #     password = event.params["password"]
-
-    #     parameters, _ = self._retrieve_s3_parameters()
-    #     try:
-    #         self.charm.unit.status = ops.MaintenanceStatus("Creating backup...")
-    #         # metadata = self._upload_metadata_to_s3()
-    #         # And generate the new backup id
-
-    #         # Validate backup settings
-
-    #         # Test uploading metadata to S3 as a credential test.
-    #         #
-    #         # Postgres-operator updates config flag to indicate "is_creating_backup".
-    #         #
-    #         # Run the backup
-    #         self._upload_images_to_s3(username=username, password=password, s3_path=f"backup/{self.stanza_name}/latest", s3_parameters=parameters)
-    #         #
-    #         # Change the status to ActiveStatus and remove config flag.
-    #         backup_id = "backup-id"
-    #         event.set_results({"backup-id": backup_id})
-
-    #         self.charm.unit.status = ops.ActiveStatus()
-
-    #     except subprocess.CalledProcessError:
-    #         event.fail("Failed to generate backup")
-
-    def _archive_and_upload_to_s3(
-        self,
-        event: ActionEvent,
-        ca_file_path: Any,
-        username: str,
-        s3_path: str,
-        s3_parameters: dict,
-    ) -> bool:
-        # get bucket
-        bucket_name = s3_parameters["bucket"]
-        s3 = self._get_s3_session_resource(s3_parameters, ca_file_path)
-        bucket = s3.Bucket(bucket_name)
-
-        # get regions
-        event.log("Retrieving region ids from MAAS...")
-        success, regions = self._get_region_ids(username=username)
-        logger.critical(f"Regions {regions}")
-        if not success:
-            logger.error("Failed to get region ids for S3 backup")
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to get region ids for S3 backup"
-            )
-            return False
-
-        # upload regions
-        try:
-            region_path = os.path.join(s3_path, "controllers.txt")
-            with tempfile.NamedTemporaryFile(suffix=".txt") as f:
-                f.write("\n".join(regions).encode("utf-8"))
-                f.flush()
-                event.log("Uploading region ids to S3...")
-                bucket.upload_file(f.name, region_path)
-        except Exception as e:
-            logger.exception(
-                f"Failed to upload region ids to S3 bucket={bucket_name}, path={s3_path}",
-                exc_info=e,
-            )
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to upload region ids to S3 backup"
-            )
-            return False
-
-        # zip and upload images
-        try:
-            image_path = os.path.join(s3_path, "images-storage.tar.gz")
-            with tempfile.NamedTemporaryFile(suffix=".tar.gz") as f:
-                event.log("Creating image archive for S3 backup...")
-                with tarfile.open(fileobj=f, mode="w:gz") as tar:
-                    tar.add(
-                        "/var/snap/maas/common/maas/image-storage",
-                        arcname="images-storage",
-                    )
-                f.flush()
-                event.log("Uploading image archive to S3...")
-                bucket.upload_file(f.name, image_path)
-        except Exception as e:
-            logger.exception(
-                f"Failed to create image archive for S3 backup in bucket={bucket_name}, path={s3_path}",
-                exc_info=e,
-            )
-            self.charm.unit.status = ops.BlockedStatus(
-                "Failed to create image archive for S3 backup"
-            )
-            return False
-
-        return True
-
     def _run_backup(
         self,
         event: ActionEvent,
@@ -448,24 +378,26 @@ Juju Version: {self.charm.model.juju_version!s}
                 ca_file.write(ca.encode())
                 ca_file.flush()
 
+                client = self._get_s3_session_client(s3_parameters, ca_file.name)
                 succeeded = self._archive_and_upload_to_s3(
                     event=event,
-                    ca_file_path=ca_file.name,
+                    client=client,
                     username=username,
                     s3_path=s3_path,
-                    s3_parameters=s3_parameters,
+                    bucket_name=s3_parameters["bucket"],
                 )
             else:
+                client = self._get_s3_session_client(s3_parameters, None)
                 succeeded = self._archive_and_upload_to_s3(
                     event=event,
-                    ca_file_path=None,
+                    client=client,
                     username=username,
                     s3_path=s3_path,
-                    s3_parameters=s3_parameters,
+                    bucket_name=s3_parameters["bucket"],
                 )
         if not succeeded:
             # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
-            error_message = "Failed to archive and upload images to S3"
+            error_message = "Failed to archive and upload MAAS files to S3"
             logger.error(f"Backup failed: {error_message}")
             event.fail(error_message)
             return
@@ -474,93 +406,78 @@ Juju Version: {self.charm.model.juju_version!s}
             logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
             event.set_results({"backup-status": f"backup created with id {backup_id}"})
 
-    #         return_code, stdout, stderr = self._execute_command(command)
-    #         if return_code != 0:
-    #             logger.error(stderr)
+    def _archive_and_upload_to_s3(
+        self,
+        event: ActionEvent,
+        client: Any,
+        username: str,
+        s3_path: str,
+        bucket_name: str,
+    ) -> bool:
+        # get regions
+        event.log("Retrieving region ids from MAAS...")
+        success, regions = self._get_region_ids(username=username)
+        logger.critical(f"Regions {regions}")
+        if not success:
+            logger.error("Failed to get region ids for S3 backup")
+            self.charm.unit.status = ops.BlockedStatus(
+                "Failed to get region ids for S3 backup"
+            )
+            return False
 
-    #             # Recover the backup id from the logs.
-    #             backup_label_stdout_line = re.findall(
-    #                 r"(new backup label = )([0-9]{8}[-][0-9]{6}[F])$", stdout, re.MULTILINE
-    #             )
-    #             if len(backup_label_stdout_line) > 0:
-    #                 backup_id = backup_label_stdout_line[0][1]
-    #             else:
-    #                 # Generate a backup id from the current date and time if the backup failed before
-    #                 # generating the backup label (our backup id).
-    #                 backup_id = self._generate_backup_id()
+        # upload regions
+        try:
+            region_path = os.path.join(s3_path, "controllers.txt")
+            with tempfile.NamedTemporaryFile(suffix=".txt") as f:
+                f.write("\n".join(regions).encode("utf-8"))
+                f.flush()
+                event.log("Uploading region ids to S3...")
+                client.upload_file(
+                    f.name,
+                    bucket_name,
+                    region_path,
+                    Callback=ProgressPercentage(f.name, event),
+                )
+        except Exception as e:
+            logger.exception(
+                f"Failed to upload region ids to S3 bucket={bucket_name}, path={s3_path}",
+                exc_info=e,
+            )
+            self.charm.unit.status = ops.BlockedStatus(
+                "Failed to upload region ids to S3 backup"
+            )
+            return False
 
-    #             # Upload the logs to S3.
-    #             logs = f"""Stdout:
-    # {stdout}
+        # archive and upload images
+        try:
+            image_path = os.path.join(s3_path, "images-storage.tar.gz")
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz") as f:
+                event.log("Creating image archive for S3 backup...")
+                with tarfile.open(fileobj=f, mode="w:gz") as tar:
+                    tar.add(
+                        "/var/snap/maas/common/maas/image-storage",
+                        arcname="images-storage",
+                    )
+                f.flush()
+                event.log("Uploading image archive to S3...")
+                client.upload_file(
+                    f.name,
+                    bucket_name,
+                    image_path,
+                    Callback=ProgressPercentage(f.name, event),
+                )
+        except Exception as e:
+            logger.exception(
+                f"Failed to create image archive for S3 backup in bucket={bucket_name}, path={s3_path}",
+                exc_info=e,
+            )
+            self.charm.unit.status = ops.BlockedStatus(
+                "Failed to create image archive for S3 backup"
+            )
+            return False
 
-    # Stderr:
-    # {stderr}
-    # """
-    #             ca_chain = s3_parameters.get("tls-ca-chain", [])
-    #             with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
-    #                 if ca_file:
-    #                     ca = "\n".join(ca_chain)
-    #                     ca_file.write(ca.encode())
-    #                     ca_file.flush()
+        return True
 
-    #                     s3 = self._get_s3_session_resource(s3_parameters, ca_file)
-    #                 else:
-    #                     s3 = self._get_s3_session_resource(s3_parameters, None)
-
-    #                 self._upload_content_to_s3(
-    #                     logs,
-    #                     os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
-    #                         "/"
-    #                     ),
-    #                     s3_parameters["bucket"],
-    #                     s3,
-    #                 )
-
-    #             error_message = f"Failed to backup MAAS with error: {stderr}"
-    #             logger.error(f"Backup failed: {error_message}")
-    #             event.fail(error_message)
-    #         else:
-    #             try:
-    #                 backup_id = self._list_backups(s3_parameters)[-1]
-    #             except ListBackupsError as e:
-    #                 logger.exception(e)
-    #                 error_message = "Failed to retrieve backup id"
-    #                 logger.error(f"Backup failed: {error_message}")
-    #                 event.fail(error_message)
-    #                 return
-
-    #             # Upload the logs to S3 and fail the action if it doesn't succeed.
-    #             logs = f"""Stdout:
-    # {stdout}
-
-    # Stderr:
-    # {stderr}
-    # """
-    #             ca_chain = s3_parameters.get("tls-ca-chain", [])
-    #             with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
-    #                 if ca_file:
-    #                     ca = "\n".join(ca_chain)
-    #                     ca_file.write(ca.encode())
-    #                     ca_file.flush()
-
-    #                     s3 = self._get_s3_session_resource(s3_parameters, ca_file)
-    #                 else:
-    #                     s3 = self._get_s3_session_resource(s3_parameters, None)
-
-    #                 if not self._upload_content_to_s3(
-    #                     logs,
-    #                     os.path.join(s3_parameters["path"], f"backup/{backup_id}/backup.log").lstrip(
-    #                         "/"
-    #                     ),
-    #                     s3_parameters["bucket"],
-    #                     s3,
-    #                 ):
-    #                     error_message = "Error uploading logs to S3"
-    #                     logger.error(f"Backup failed: {error_message}")
-    #                     event.fail(error_message)
-    #                 else:
-    #                     logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
-    #                     event.set_results({"backup-status": "backup created"})
     def _generate_backup_id(self) -> str:
         """Create a backup id for failed backup operations (to store log file)."""
         return datetime.strftime(datetime.now(), BACKUP_ID_FORMAT)
