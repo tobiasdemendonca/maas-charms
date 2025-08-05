@@ -44,14 +44,14 @@ S3_BLOCK_MESSAGES = [
 class ProgressPercentage:
     """Class to track the progress of a file upload to S3."""
 
-    def __init__(self, filename: str, event: ActionEvent, update_interval: int = 10):
+    def __init__(self, filename: str, log_label: str, update_interval: int = 10):
         self._filename = filename
         self._size = float(os.path.getsize(filename))
         self._seen_so_far = 0
         self._lock = threading.Lock()
         self._update_interval = update_interval
-        self._event = event
         self._last_percentage = 0
+        self._log_label = log_label
 
     def __call__(self, bytes_amount: int):
         """Track the progress of the upload as a callback."""
@@ -63,9 +63,7 @@ class ProgressPercentage:
                 percentage - self._last_percentage
             ) >= self._update_interval or percentage >= 100:
                 self._last_percentage = percentage
-                self._event.set_results(
-                    {"backup-status": f"File upload at {percentage:.2f}%"}
-                )
+                logger.info(f"uploading {self._log_label} to s3: {percentage:.2f}%")
 
 
 class MAASBackups(Object):
@@ -313,16 +311,12 @@ class MAASBackups(Object):
             self.charm.unit.status(ActiveStatus())
 
     def _on_create_backup_action(self, event) -> None:
-        logger.info("A backup has been requested on unit")
         username = event.params["username"]
         can_unit_perform_backup, validation_message = self._can_unit_perform_backup()
         if not can_unit_perform_backup:
             logger.error(f"Backup failed: {validation_message}")
             event.fail(validation_message)
             return
-
-        # Retrieve the S3 Parameters to use when uploading the backup logs to S3.
-        s3_parameters, _ = self._retrieve_s3_parameters()
 
         # Test uploading metadata to S3 to test credentials before backup.
         datetime_backup_requested = datetime.now().strftime(BACKUP_ID_FORMAT)
@@ -334,6 +328,7 @@ Juju Version: {self.charm.model.juju_version!s}
 """
 
         logging.info("Uploading metadata to S3")
+        s3_parameters, _ = self._retrieve_s3_parameters()
         if not self._upload_content_to_s3(
             metadata,
             os.path.join(s3_parameters["path"], "backup/latest").lstrip("/"),
@@ -350,15 +345,6 @@ Juju Version: {self.charm.model.juju_version!s}
 
         self.charm.unit.status = ActiveStatus()
 
-    def _get_region_ids(self, username: str) -> tuple[bool, set[str]]:
-        try:
-            return True, MaasHelper.get_regions(
-                admin_username=username, maas_ip=self.charm.bind_address
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to get region ids: {e}")
-            return False, set()
-
     def _run_backup(
         self,
         event: ActionEvent,
@@ -367,9 +353,7 @@ Juju Version: {self.charm.model.juju_version!s}
         username: str,
     ) -> None:
         backup_id = self._generate_backup_id()
-        s3_path = os.path.join(s3_parameters["path"], f"backup/{backup_id}").lstrip(
-            "/"
-        )  # maybe move above.
+        s3_path = os.path.join(s3_parameters["path"], f"backup/{backup_id}").lstrip("/")
 
         ca_chain = s3_parameters.get("tls-ca-chain", [])
         with tempfile.NamedTemporaryFile() if ca_chain else nullcontext() as ca_file:
@@ -377,24 +361,17 @@ Juju Version: {self.charm.model.juju_version!s}
                 ca = "\n".join(ca_chain)
                 ca_file.write(ca.encode())
                 ca_file.flush()
-
                 client = self._get_s3_session_client(s3_parameters, ca_file.name)
-                succeeded = self._archive_and_upload_to_s3(
-                    event=event,
-                    client=client,
-                    username=username,
-                    s3_path=s3_path,
-                    bucket_name=s3_parameters["bucket"],
-                )
             else:
                 client = self._get_s3_session_client(s3_parameters, None)
-                succeeded = self._archive_and_upload_to_s3(
-                    event=event,
-                    client=client,
-                    username=username,
-                    s3_path=s3_path,
-                    bucket_name=s3_parameters["bucket"],
-                )
+
+            succeeded = self._archive_and_upload_to_s3(
+                event=event,
+                client=client,
+                username=username,
+                s3_path=s3_path,
+                bucket_name=s3_parameters["bucket"],
+            )
         if not succeeded:
             # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
             error_message = "Failed to archive and upload MAAS files to S3"
@@ -404,7 +381,7 @@ Juju Version: {self.charm.model.juju_version!s}
         else:
             # TODO: upload logs using backup_id and fail the action if it doesn't succeed.
             logger.info(f"Backup succeeded: with backup-id {datetime_backup_requested}")
-            event.set_results({"backup-status": f"backup created with id {backup_id}"})
+            event.set_results({"backups": f"backup created with id {backup_id}"})
 
     def _archive_and_upload_to_s3(
         self,
@@ -436,7 +413,7 @@ Juju Version: {self.charm.model.juju_version!s}
                     f.name,
                     bucket_name,
                     region_path,
-                    Callback=ProgressPercentage(f.name, event),
+                    Callback=ProgressPercentage(f.name, log_label="region ids"),
                 )
         except Exception as e:
             logger.exception(
@@ -464,7 +441,7 @@ Juju Version: {self.charm.model.juju_version!s}
                     f.name,
                     bucket_name,
                     image_path,
-                    Callback=ProgressPercentage(f.name, event),
+                    Callback=ProgressPercentage(f.name, "image archive"),
                 )
         except Exception as e:
             logger.exception(
@@ -477,6 +454,15 @@ Juju Version: {self.charm.model.juju_version!s}
             return False
 
         return True
+
+    def _get_region_ids(self, username: str) -> tuple[bool, set[str]]:
+        try:
+            return True, MaasHelper.get_regions(
+                admin_username=username, maas_ip=self.charm.bind_address
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to get region ids: {e}")
+            return False, set()
 
     def _generate_backup_id(self) -> str:
         """Create a backup id for failed backup operations (to store log file)."""
