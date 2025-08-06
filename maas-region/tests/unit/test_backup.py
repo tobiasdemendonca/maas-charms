@@ -497,9 +497,24 @@ backup-id            | action              | status   | backup-path
         )
         self.harness.remove_relation(rel)
 
-    def test_on_create_backup_action(self):
-        # TODO: implement this
-        pass
+    @patch("backups.MAASBackups._run_backup")
+    @patch("backups.MAASBackups._upload_content_to_s3")
+    @patch("backups.MAASBackups._retrieve_s3_parameters")
+    @patch("backups.MAASBackups._can_unit_perform_backup")
+    @patch("charm.MaasRegionCharm._create_or_get_internal_admin")
+    def test_on_create_backup_action(
+        self, admin, can_unit_backup, s3_params, upload_content, run_backup
+    ):
+        admin.return_value = {"username": "admin", "password": "password"}
+        can_unit_backup.return_value = True, ""
+        s3_params.return_value = ({}, None)
+        self.harness.begin()
+        self.harness.run_action("create-backup")
+        admin.assert_called_once()
+        s3_params.assert_called_once()
+        run_backup.assert_called_once()
+        upload_content.assert_called_once()
+        self.assertIsInstance(self.harness.charm.unit.status, ops.ActiveStatus)
 
     def test_run_backup(self):
         # TODO: implement this
