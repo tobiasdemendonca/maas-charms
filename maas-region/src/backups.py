@@ -25,10 +25,7 @@ from botocore.exceptions import (
     SSLError,
 )
 from botocore.regions import EndpointResolver
-from charms.data_platform_libs.v0.s3 import (
-    CredentialsChangedEvent,
-    S3Requirer,
-)
+from charms.data_platform_libs.v0.s3 import CredentialsChangedEvent, S3Requirer
 from ops.charm import ActionEvent
 from ops.framework import Object
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
@@ -490,7 +487,7 @@ Juju Version: {self.charm.model.juju_version!s}
     ):
         # get region ids
         event.log("Retrieving region ids from MAAS...")
-        success, regions = self._get_region_ids()
+        success, regions = self.charm._get_region_system_ids()
         if not success:
             logger.error(
                 "Failed to get region ids for S3 backup. Please check the juju debug-log for more details."
@@ -530,16 +527,6 @@ Juju Version: {self.charm.model.juju_version!s}
                 image_path,
                 Callback=ProgressPercentage(f.name, "image archive"),
             )
-
-    def _get_region_ids(self) -> tuple[bool, set[str]]:
-        try:
-            credentials = self.charm._create_or_get_internal_admin()
-            return True, MaasHelper.get_regions(
-                admin_username=credentials["username"], maas_ip=self.charm.bind_address
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to get region ids: {e}")
-            return False, set()
 
     def _generate_backup_id(self) -> str:
         """Create a backup id for failed backup operations (to store log file)."""

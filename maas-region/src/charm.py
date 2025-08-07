@@ -329,6 +329,16 @@ class MaasRegionCharm(ops.CharmBase):
             return True
         return False
 
+    def _get_region_system_ids(self) -> tuple[bool, set[str]]:
+        try:
+            credentials = self._create_or_get_internal_admin()
+            return True, MaasHelper.get_regions(
+                admin_username=credentials["username"], maas_ip=self.bind_address
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to get region ids: {e}")
+            return False, set()
+
     def _get_regions(self) -> list[str]:
         eps = [socket.gethostname()]
         if peers := self.peers:
