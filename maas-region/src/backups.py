@@ -5,7 +5,6 @@
 
 import logging
 import os
-import subprocess
 import tarfile
 import tempfile
 import threading
@@ -29,8 +28,6 @@ from charms.data_platform_libs.v0.s3 import CredentialsChangedEvent, S3Requirer
 from ops.charm import ActionEvent
 from ops.framework import Object
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
-
-from helper import MaasHelper
 
 logger = logging.getLogger(__name__)
 
