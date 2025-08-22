@@ -65,6 +65,12 @@ class RegionsNotAvailableError(Exception):
     pass
 
 
+class BootResourcesImportingError(Exception):
+    """Raised when boot resources are being imported."""
+
+    pass
+
+
 class ProgressPercentage:
     """Parent class to track the progress of a file transfer to/from S3."""
 
@@ -564,7 +570,7 @@ Juju Version: {self.charm.model.juju_version!s}
         try:
             regions = self.charm._get_region_system_ids()
         except subprocess.CalledProcessError:
-            # Avoid logging the apikey of an Admin user
+            # Avoid logging the apikey of an admin user
             raise RegionsNotAvailableError("Failed to retrieve region ids from the MAAS API")
 
         # upload regions
@@ -581,6 +587,17 @@ Juju Version: {self.charm.model.juju_version!s}
             )
 
         # archive and upload images
+        try:
+            if self.charm.is_importing_bootresources():
+                raise BootResourcesImportingError(
+                    "Boot resources are being imported. Cannot perform backup of incomplete images. Please wait for the import to complete before."
+                )
+        except (subprocess.CalledProcessError, ValueError):
+            # Avoid logging the apikey of an admin user
+            raise BootResourcesImportingError(
+                "Failed to check if boot resources are being imported."
+            )
+
         image_path = os.path.join(s3_path, IMAGE_TAR_FILENAME)
         with tempfile.NamedTemporaryFile(suffix=".tar.gz") as f:
             event.log("Creating image archive for S3 backup...")

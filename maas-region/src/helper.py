@@ -406,3 +406,31 @@ class MaasHelper:
                 return file.readline().strip()
         except OSError:
             return None
+
+    @staticmethod
+    def is_importing_bootresources(username: str, maas_ip: str) -> bool | None:
+        """Check if boot resources are being imported.
+
+        Args:
+            username (str): The username used to login to MAAS to make the call
+            maas_ip (str): The IP address of the MAAS API
+
+        Returns:
+            bool | None: True if boot resources are being imported, False if not, None
+            if an unexpected value was returned from MAAS
+
+        Raises:
+            CalledProcessError: if "maas boot-resources is-importing" command failed for any reason
+            ValueError: if an unexpected value was returned from MAAS
+        """
+        MaasHelper._login_as_admin(admin_username=username, maas_ip=maas_ip)
+        cmd = ["/snap/bin/maas", username, "boot-resources", "is-importing"]
+        output = subprocess.check_output(cmd, text=True).strip()
+        if output.lower() == "true":
+            return True
+        elif output.lower() == "false":
+            return False
+        else:
+            msg = f"Unknown return value found from MAAS when running boot-resources is-importing: {output!r}"
+            logger.warning(msg)
+            raise ValueError(msg)

@@ -343,6 +343,22 @@ class MaasRegionCharm(ops.CharmBase):
                     eps += [addr]
         return list(set(eps))
 
+    def is_importing_bootresources(self) -> bool | None:
+        """Check if boot resources are being imported.
+
+        Returns:
+            bool | None: True if boot resources are being imported, False if not, None
+            if an unexpected value was returned from MAAS
+
+        Raises:
+            CalledProcessError: if "maas boot-resources is-importing" command failed for any reason
+            ValueError: if an unexpected value was returned from MAAS
+        """
+        credentials = self._create_or_get_internal_admin()
+        return MaasHelper.is_importing_bootresources(
+            admin_username=credentials["username"], maas_ip=self.bind_address
+        )
+
     def _update_ha_proxy(self) -> None:
         region_port = (
             MAAS_HTTPS_PORT if self.config["tls_mode"] == "passthrough" else MAAS_HTTP_PORT
