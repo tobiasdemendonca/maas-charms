@@ -506,6 +506,7 @@ Juju Version: {self.charm.model.juju_version!s}
         backup_id = self._generate_backup_id()
         s3_path = os.path.join(s3_parameters["path"], f"backup/{backup_id}").lstrip("/")
 
+        event.log(f"Commencing backup with id: {backup_id}...")
         backup_success = self._execute_backup_to_s3(
             event=event,
             s3_parameters=s3_parameters,
@@ -594,6 +595,7 @@ Juju Version: {self.charm.model.juju_version!s}
                 )
         except (subprocess.CalledProcessError, ValueError):
             # Avoid logging the apikey of an admin user
+            logger.critical("Bad sync status!")
             raise BootResourcesImportingError(
                 "Failed to check if boot resources are being imported."
             )
