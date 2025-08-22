@@ -356,7 +356,7 @@ class MaasRegionCharm(ops.CharmBase):
         """
         credentials = self._create_or_get_internal_admin()
         return MaasHelper.is_importing_bootresources(
-            admin_username=credentials["username"], maas_ip=self.bind_address
+            username=credentials["username"], maas_ip=self.bind_address
         )
 
     def _update_ha_proxy(self) -> None:
