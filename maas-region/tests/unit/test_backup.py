@@ -15,6 +15,7 @@ from botocore.exceptions import BotoCoreError, ClientError, ConnectTimeoutError,
 
 from backups import (
     FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE,
+    BootResourcesImportingError,
     DownloadProgressPercentage,
     RegionsNotAvailableError,
     UploadProgressPercentage,
@@ -682,11 +683,13 @@ backup-id            | action              | status   | backup-path
         _named_temporary_file.assert_called_once()
 
     @patch("tarfile.open")
+    @patch("charm.MaasRegionCharm.is_importing_bootresources")
     @patch("charm.MaasRegionCharm._get_region_system_ids")
-    def test_backup_maas_to_s3(self, get_region_ids, _tar_open):
+    def test_backup_maas_to_s3(self, get_region_ids, is_importing, _tar_open):
         event_mock = MagicMock(spec=ops.ActionEvent)
         client_mock = MagicMock()
         self.harness.begin()
+        is_importing.return_value = False
 
         # Test fails to get region ids
         get_region_ids.side_effect = subprocess.CalledProcessError(1, "maas")
@@ -714,7 +717,22 @@ backup-id            | action              | status   | backup-path
                 s3_path="/test-path/test-dir",
             )
 
+        # Test is_importing
+        get_region_ids.return_value = set()
+        event_mock.reset_mock()
+        client_mock.reset_mock()
+        is_importing.return_value = True
+        client_mock.upload_file.side_effect = None
+        with self.assertRaises(BootResourcesImportingError):
+            self.harness.charm.backup._backup_maas_to_s3(
+                event=event_mock,
+                client=client_mock,
+                bucket_name="test-bucket",
+                s3_path="/test-path/test-dir",
+            )
+
         # Test fails to upload
+        is_importing.return_value = False
         get_region_ids.return_value = set()
         event_mock.reset_mock()
         client_mock.reset_mock()
