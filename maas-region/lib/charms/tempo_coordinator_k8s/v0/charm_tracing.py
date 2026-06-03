@@ -32,8 +32,7 @@ def _remove_stale_otel_sdk_packages():
     import logging
     import shutil
     from collections import defaultdict
-
-    from importlib_metadata import distributions
+    from importlib.metadata import distributions
 
     otel_logger = logging.getLogger("charm_tracing_otel_patcher")
     otel_logger.debug("Applying _remove_stale_otel_sdk_packages patch on charm upgrade")
@@ -108,17 +107,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import (
     INVALID_SPAN,
     Tracer,
-)
-from opentelemetry.trace import get_current_span as otlp_get_current_span
-from opentelemetry.trace import (
     get_tracer,
     get_tracer_provider,
     set_span_in_context,
     set_tracer_provider,
 )
+from opentelemetry.trace import get_current_span as otlp_get_current_span
 from ops.charm import CharmBase
 from ops.framework import Framework
-
 
 if os.getenv("CHARM_TRACING_DEPRECATION_NOTICE_DISABLED"):
     import warnings

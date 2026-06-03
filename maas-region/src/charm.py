@@ -129,6 +129,7 @@ class MaasRegionCharm(ops.CharmBase):
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.collect_unit_status, self._on_collect_status)
+        self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
 
         maas_peer_events = self.on[MAAS_PEER_NAME]
         self.framework.observe(maas_peer_events.relation_joined, self._on_maas_peer_changed)
@@ -611,6 +612,22 @@ class MaasRegionCharm(ops.CharmBase):
             MaasHelper.install(channel)
         except Exception as ex:
             logger.error(str(ex))
+
+    def _on_upgrade_charm(self, _event: ops.UpgradeCharmEvent) -> None:
+        """Upgrade MAAS snap.
+
+        Args:
+            event (ops.UpgradeCharmEvent): Event from ops framework
+        """
+        self.unit.status = ops.MaintenanceStatus("upgrading...")
+        channel = str(self.config.get("channel", MAAS_SNAP_CHANNEL))
+        try:
+            logger.info(f"doing some work to upgrade to channel {channel}")
+            # MaasHelper.upgrade(channel)
+        except Exception as ex:
+            logger.error(str(ex))
+
+        logger.info("finished upgrade!")
 
     def _on_remove(self, _event: ops.RemoveEvent) -> None:
         """Remove MAAS from the machine.
