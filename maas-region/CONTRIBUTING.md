@@ -23,6 +23,13 @@ tox run -e integration   # integration tests
 tox                      # runs 'format', 'lint', 'static', and 'unit' environments
 ```
 
+To run a specific test based on the class or function name, pass `-- -k <keyword>` to the `tox` command. For example:
+
+```shell
+tox run -e integration -- -k <keyword>
+tox run -e unit -- -k <keyword>
+```
+
 ## Build the charm
 
 Build the charm in this git repository using:
