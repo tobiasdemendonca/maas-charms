@@ -15,12 +15,12 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import ops
+from charmlibs.rollingops import OperationResult, RollingOpsManager
 from charms.data_platform_libs.v0 import data_interfaces as db
 from charms.grafana_agent.v0 import cos_agent
 from charms.haproxy.v1.haproxy_route_tcp import HaproxyRouteTcpRequirer, LoadBalancingAlgorithm
 from charms.maas_site_manager_k8s.v0 import enroll
 from charms.operator_libs_linux.v2.snap import SnapError
-from charms.rolling_ops.v0.rollingops import RollingOpsManager, RunWithLock
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer, charm_tracing_config
 from ops.model import SecretNotFoundError
@@ -237,7 +237,9 @@ class MaasRegionCharm(ops.CharmBase):
 
         # MAAS initialize manager, used to coordinate sequential inits
         self.maas_init_manager = RollingOpsManager(
-            charm=self, relation=MAAS_INIT_RELATION, callback=self._on_rolling_maas_init
+            charm=self,
+            peer_relation_name=MAAS_INIT_RELATION,
+            callback_targets={"initialise": self._on_rolling_maas_init},
         )
 
     @property
@@ -462,16 +464,16 @@ class MaasRegionCharm(ops.CharmBase):
         except subprocess.CalledProcessError:
             return False
 
-    def _on_rolling_maas_init(self, _: RunWithLock):
+    def _on_rolling_maas_init(
+        self,
+    ) -> OperationResult:
         """Run MAAS initialization.
 
         Required for RollingOpsManager, which expects a callback that
         takes a CharmBase object and EventBase object as arguments.
-
-        Args:
-            _ (RunWithLock): Event passed in by RollingOpsManager, not used.
         """
-        self._initialize_maas()
+        success = self._initialize_maas()
+        return OperationResult.RELEASE if success else OperationResult.RETRY_RELEASE
 
     def get_region_system_ids(self) -> set[str]:
         """Get the system IDs of all regions in the MAAS cluster.
@@ -696,7 +698,10 @@ class MaasRegionCharm(ops.CharmBase):
         logger.info(f"MAAS database credentials received for user '{event.username}'")
         if self.connection_string:
             self.unit.status = ops.MaintenanceStatus("Initializing the MAAS database")
-            self.on[MAAS_INIT_RELATION].acquire_lock.emit()
+            self.maas_init_manager.request_async_lock(
+                callback_id="initialise", max_retry=1
+            )
+            # self.on[MAAS_INIT_RELATION].acquire_lock.emit()
 
     def _on_maasdb_endpoints_changed(self, event: db.DatabaseEndpointsChangedEvent) -> None:
         """Update database DSN.
