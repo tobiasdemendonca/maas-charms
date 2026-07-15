@@ -1,4 +1,4 @@
-# Copyright 2025 Canonical Ltd.
+# Copyright 2025-2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
 """Backups implementation."""
@@ -33,7 +33,7 @@ from botocore.regions import EndpointResolver
 from charms.data_platform_libs.v0.s3 import CredentialsChangedEvent, S3Requirer
 from ops.charm import ActionEvent
 from ops.framework import Object
-from ops.model import ActiveStatus, MaintenanceStatus
+from ops.model import MaintenanceStatus
 
 from helper import MaasHelper
 
@@ -43,9 +43,6 @@ BACKUP_ID_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE = (
     "failed to access/create the bucket, check your S3 settings"
 )
-S3_BLOCK_MESSAGES = [
-    FAILED_TO_ACCESS_CREATE_BUCKET_ERROR_MESSAGE,
-]
 SNAP_PATH_TO_IDS = "/var/snap/maas/common/maas/maas_id"
 SNAP_PATH_TO_IMAGES = "/var/snap/maas/common/maas/image-storage"
 SNAP_PATH_TO_PRESEEDS = "/var/snap/maas/current/preseeds"
@@ -482,7 +479,10 @@ class MAASBackups(Object):
             return
 
     def _on_s3_credential_gone(self, event) -> None:
-        if self.charm.is_blocked:
+        if not self.charm.unit.is_leader():
+            return
+
+        if self.charm.get_peer_data(self.charm.app, S3_CONFIGURATION_BLOCKED_KEY):
             self.charm.set_peer_data(self.charm.app, S3_CONFIGURATION_BLOCKED_KEY, "")
 
     def _on_create_backup_action(self, event) -> None:
@@ -517,8 +517,6 @@ Juju Version: {self.charm.model.juju_version!s}
         self.charm.unit.status = MaintenanceStatus("creating backup")
 
         self._run_backup(event, s3_parameters)
-
-        self.charm.unit.status = ActiveStatus()
 
     def _run_backup(
         self,
@@ -745,8 +743,6 @@ Juju Version: {self.charm.model.juju_version!s}
         )
 
         event.log("Region restore complete")
-
-        self.charm.unit.status = ActiveStatus()
         event.set_results({"restore-status": "restore finished"})
 
     def _run_restore(
