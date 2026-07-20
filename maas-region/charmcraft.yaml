@@ -126,6 +126,10 @@ actions:
   list-backups:
     description: |
       List available MAAS backups
+  upgrade:
+    description: Upgrade MAAS workload to the latest version available to the machine for the relevant track of the charm, for example if the charm is deployed with --channel=3.7/stable, this action will upgrade from the current version to the latest 3.7.x version available.
+  pre-upgrade-check:
+    description: Check if the workload can be upgraded to the latest version available to the machine for the relevant track of the charm, for example if the charm is deployed with --channel=3.7/stable, this action will check if the workload can be upgraded from the current version to the latest 3.7.x version available.
 
 parts:
   charm:

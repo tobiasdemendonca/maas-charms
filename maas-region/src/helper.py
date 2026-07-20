@@ -120,6 +120,17 @@ class MaasHelper:
             maas.hold()
 
     @staticmethod
+    def upgrade(channel: str) -> None:
+        """Upgrade the snap to the latest version available on the specified channel.
+
+        Args:
+            channel (str): snapstore channel
+        """
+        maas = SnapCache()[MAAS_SNAP_NAME]
+        maas.ensure(SnapState.Latest, channel=channel)
+        maas.hold()
+
+    @staticmethod
     def uninstall() -> None:
         """Uninstall snap."""
         maas = SnapCache()[MAAS_SNAP_NAME]
@@ -144,6 +155,16 @@ class MaasHelper:
         return maas.version.split("-")[0] if maas.version is not None and maas.present else None
 
     @staticmethod
+    def get_present() -> bool:
+        """Check if snap is present.
+
+        Returns:
+            bool: True if snap is present, False otherwise
+        """
+        maas = SnapCache()[MAAS_SNAP_NAME]
+        return maas.present
+
+    @staticmethod
     def get_installed_channel() -> str | None:
         """Get installed channel.
 
@@ -152,6 +173,48 @@ class MaasHelper:
         """
         maas = SnapCache()[MAAS_SNAP_NAME]
         return maas.channel if maas.present else None
+
+    @staticmethod
+    def get_installed_revision() -> str | None:
+        """Get installed snap revision.
+
+        Returns:
+            Union[str, None]: revision if installed
+        """
+        maas = SnapCache()[MAAS_SNAP_NAME]
+        return maas.revision if maas.present else None
+
+    @staticmethod
+    def get_host_architecture() -> str:
+        """Get the snap architecture of this machine, e.g. "amd64".
+
+        Returns:
+            str: the dpkg architecture name
+        """
+        return subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
+
+    @staticmethod
+    def get_latest_snap_info(channel: str) -> dict[str, str] | None:
+        """Get the latest version and revision available in the snap store for a channel.
+
+        The snap store resolves this for the architecture of this machine.
+
+        Args:
+            channel (str): snapstore channel, e.g. "3.7/stable"
+
+        Returns:
+            Union[dict, None]: {"version": ..., "revision": ...} if the channel
+                exists in the store
+        """
+        info = SnapClient().get_snap_information(MAAS_SNAP_NAME)
+        channel_info = info.get("channels", {}).get(channel)  # type: ignore[union-attr]
+        if not isinstance(channel_info, dict):
+            return None
+        version = channel_info.get("version")
+        revision = channel_info.get("revision")
+        if version is None or revision is None:
+            return None
+        return {"version": str(version).split("-")[0], "revision": str(revision)}
 
     @staticmethod
     def get_maas_id() -> str | None:

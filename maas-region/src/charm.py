@@ -107,6 +107,14 @@ COMMON_DEFAULT_HAPROXY_ARGS = {
 }
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse a MAAS version like "3.7.2" into a comparable tuple.
+
+    Pre-release suffixes such as "~alpha1" are dropped.
+    """
+    return tuple(int(part) for part in version.split("~")[0].split(".") if part.isdigit())
+
+
 @trace_charm(
     tracing_endpoint="charm_tracing_endpoint",
     extra_types=[
@@ -222,6 +230,8 @@ class MaasRegionCharm(ops.CharmBase):
         self.framework.observe(self.on.get_api_endpoint_action, self._on_get_api_endpoint_action)
         self.framework.observe(self.on.get_maas_secret_action, self._on_get_maas_secret_action)
         self.framework.observe(self.on.get_maas_status_action, self._on_get_maas_status_action)
+        self.framework.observe(self.on.pre_upgrade_check_action, self._on_pre_upgrade_check_action)
+        self.framework.observe(self.on.upgrade_action, self._on_upgrade_action)
 
         # Charm configuration
         self.framework.observe(self.on.config_changed, self._on_config_changed)
@@ -230,6 +240,64 @@ class MaasRegionCharm(ops.CharmBase):
         self.maas_init_manager = RollingOpsManager(
             charm=self, relation=MAAS_INIT_RELATION, callback=self._on_rolling_maas_init
         )
+
+    def _on_upgrade_action(self, _event: ops.ActionEvent) -> None:
+        self.unit.status = ops.MaintenanceStatus("upgrading...")
+        try:
+            MaasHelper.upgrade(MAAS_SNAP_CHANNEL)
+        except Exception as ex:
+            logger.error(str(ex))
+
+    def _on_pre_upgrade_check_action(self, event: ops.ActionEvent) -> None:
+        current_version = MaasHelper.get_installed_version()
+        current_revision = MaasHelper.get_installed_revision()
+        channel = MaasHelper.get_installed_channel()
+        if not current_version or not current_revision or not channel:
+            event.fail("MAAS is not installed")
+            return
+        try:
+            target = MaasHelper.get_latest_snap_info(channel)
+        except Exception:
+            logger.exception("Failed to query the snap store for the latest MAAS version")
+            event.fail(
+                f"Failed to query the snap store for the latest MAAS version on channel {channel}"
+            )
+            return
+        if not target:
+            event.fail(f"No MAAS version found in the snap store for channel {channel}")
+            return
+
+        track = channel.split("/")[0]
+        results = {
+            "current-version": current_version,
+            "current-revision": current_revision,
+            "target-version": target["version"],
+            "target-revision": target["revision"],
+            "channel": channel,
+            "architecture": MaasHelper.get_host_architecture(),
+        }
+        if target["revision"] == current_revision:
+            results["info"] = (
+                f"Currently on the latest version ({current_version}, "
+                f"revision {current_revision}) for track {track}, no need to upgrade."
+            )
+        elif _version_tuple(target["version"]) < _version_tuple(current_version):
+            event.fail(
+                f"The latest version on channel {channel} ({target['version']}) is older "
+                f"than the installed version ({current_version}). "
+                "Downgrades are not supported by MAAS."
+            )
+            return
+        else:
+            results["info"] = (
+                f"Upgrade available for track {track}: "
+                f"{current_version} (revision {current_revision}) -> "
+                f"{target['version']} (revision {target['revision']}). "
+                "Ensure a recent backup exists before upgrading. "
+                "Run the create-backup action to create one, "
+                "and list-backups to see existing backups."
+            )
+        event.set_results(results)
 
     @property
     def is_tls_config_enabled(self) -> bool:
@@ -679,7 +747,7 @@ class MaasRegionCharm(ops.CharmBase):
             logger.error(str(ex))
 
     def _on_collect_status(self, e: ops.CollectStatusEvent) -> None:
-        if MaasHelper.get_installed_channel() != MAAS_SNAP_CHANNEL:
+        if not MaasHelper.get_present():
             e.add_status(ops.BlockedStatus("Failed to install MAAS snap"))
         elif (
             # If the S3 configuration is marked as blocked in the application data bag,
@@ -687,6 +755,8 @@ class MaasRegionCharm(ops.CharmBase):
             blocked_msg := self.get_peer_data(self.app, S3_CONFIGURATION_BLOCKED_KEY)
         ) and self.unit.is_leader():
             e.add_status(ops.BlockedStatus(blocked_msg))
+        elif MaasHelper.get_installed_channel() != MAAS_SNAP_CHANNEL:
+            e.add_status(ops.BlockedStatus("MAAS snap channel does not match the charm channel"))
         elif not self.unit.opened_ports().issuperset(MAAS_REGION_PORTS):
             e.add_status(ops.WaitingStatus("Waiting for service ports"))
         elif not self.connection_string:
