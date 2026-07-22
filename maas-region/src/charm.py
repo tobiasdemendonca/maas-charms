@@ -243,10 +243,9 @@ class MaasRegionCharm(ops.CharmBase):
         self.maas_init_manager = RollingOpsManager(
             charm=self, relation=MAAS_INIT_RELATION, callback=self._on_rolling_maas_init
         )
-
-        self.upgrade_manager = RollingOpsManager(
-            charm=self, relation=MAAS_UPGRADE_RELATION, callback=self._on_upgrade_action
-        )
+        # self.upgrade_manager = RollingOpsManager(
+        #     charm=self, relation=MAAS_UPGRADE_RELATION, callback=self._on_upgrade_action
+        # )
 
     def _on_upgrade_action(self, _event: ops.ActionEvent) -> None:
         self.unit.status = ops.MaintenanceStatus("upgrading...")
