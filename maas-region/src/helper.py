@@ -145,6 +145,13 @@ class MaasHelper:
             maas.stop()
 
     @staticmethod
+    def start() -> None:
+        """Start snap."""
+        maas = SnapCache()[MAAS_SNAP_NAME]
+        if maas.present:
+            maas.start()
+
+    @staticmethod
     def get_installed_version() -> str | None:
         """Get installed version.
 

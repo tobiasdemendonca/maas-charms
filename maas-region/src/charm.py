@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 MAAS_PEER_NAME = "maas-cluster"
 MAAS_DB_NAME = "maas-db"
 MAAS_INIT_RELATION = "initialize"
+MAAS_UPGRADE_RELATION = "upgrade"
 HAPROXY_NON_TLS = "ingress-tcp"
 HAPROXY_TLS = "ingress-tcp-tls"
 HAPROXY_TEMPORAL = "ingress-tcp-temporal"
@@ -230,6 +231,8 @@ class MaasRegionCharm(ops.CharmBase):
         self.framework.observe(self.on.get_api_endpoint_action, self._on_get_api_endpoint_action)
         self.framework.observe(self.on.get_maas_secret_action, self._on_get_maas_secret_action)
         self.framework.observe(self.on.get_maas_status_action, self._on_get_maas_status_action)
+        self.framework.observe(self.on.stop_maas_action, self._on_stop_maas_action)
+        self.framework.observe(self.on.start_maas_action, self._on_start_maas_action)
         self.framework.observe(self.on.pre_upgrade_check_action, self._on_pre_upgrade_check_action)
         self.framework.observe(self.on.upgrade_action, self._on_upgrade_action)
 
@@ -239,6 +242,10 @@ class MaasRegionCharm(ops.CharmBase):
         # MAAS initialize manager, used to coordinate sequential inits
         self.maas_init_manager = RollingOpsManager(
             charm=self, relation=MAAS_INIT_RELATION, callback=self._on_rolling_maas_init
+        )
+
+        self.upgrade_manager = RollingOpsManager(
+            charm=self, relation=MAAS_UPGRADE_RELATION, callback=self._on_upgrade_action
         )
 
     def _on_upgrade_action(self, _event: ops.ActionEvent) -> None:
@@ -757,6 +764,8 @@ class MaasRegionCharm(ops.CharmBase):
             e.add_status(ops.BlockedStatus(blocked_msg))
         elif MaasHelper.get_installed_channel() != MAAS_SNAP_CHANNEL:
             e.add_status(ops.BlockedStatus("MAAS snap channel does not match the charm channel"))
+        elif not MaasHelper.is_running():
+            e.add_status(ops.BlockedStatus("MAAS snap is stopped"))
         elif not self.unit.opened_ports().issuperset(MAAS_REGION_PORTS):
             e.add_status(ops.WaitingStatus("Waiting for service ports"))
         elif not self.connection_string:
@@ -907,6 +916,22 @@ class MaasRegionCharm(ops.CharmBase):
             event.set_results({"services": status})
         else:
             event.fail("MAAS is not initialized yet or failed to retrieve status")
+
+    def _on_stop_maas_action(self, event: ops.ActionEvent):
+        """Handle the stop-maas action."""
+        try:
+            MaasHelper.stop()
+            event.set_results({"status": "stopped"})
+        except SnapError as e:
+            event.fail(f"Failed to stop MAAS: {e}")
+
+    def _on_start_maas_action(self, event: ops.ActionEvent):
+        """Handle the start-maas action."""
+        try:
+            MaasHelper.start()
+            event.set_results({"status": "started"})
+        except SnapError as e:
+            event.fail(f"Failed to start MAAS: {e}")
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent):
         # validate TLS certificate and key
