@@ -72,7 +72,7 @@ class TestHelperSnapCache(unittest.TestCase):
     @patch("helper.SnapCache", autospec=True)
     def test_is_running(self, mock_snap):
         maas = self._setup_snap(mock_snap, present=True)
-        maas.services.return_value = {MAAS_SERVICE: {"activate": True}}
+        maas.services.return_value = {MAAS_SERVICE: {"active": True}}
         self.assertTrue(MaasHelper.is_running())
 
     @patch("helper.SnapCache", autospec=True)

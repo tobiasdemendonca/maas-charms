@@ -105,7 +105,7 @@ class MaasHelper:
         maas = SnapCache()[MAAS_SNAP_NAME]
         if not maas.present:
             try:
-                maas.ensure(SnapState.Latest, channel=channel)
+                maas.ensure(SnapState.Latest, channel=channel, cohort="+")
             except SnapError:
                 # The snap install may have failed due to stale snapd mount
                 # units. Run daemon-reload and retry once.
@@ -116,7 +116,7 @@ class MaasHelper:
                     check=False,
                 )
                 maas = SnapCache()[MAAS_SNAP_NAME]
-                maas.ensure(SnapState.Latest, channel=channel)
+                maas.ensure(SnapState.Latest, channel=channel, cohort="+")
             maas.hold()
 
     @staticmethod
@@ -127,7 +127,7 @@ class MaasHelper:
             channel (str): snapstore channel
         """
         maas = SnapCache()[MAAS_SNAP_NAME]
-        maas.ensure(SnapState.Latest, channel=channel)
+        maas.ensure(SnapState.Latest, channel=channel, cohort="+")
         maas.hold()
 
     @staticmethod
@@ -284,7 +284,7 @@ class MaasHelper:
         """
         maas = SnapCache()[MAAS_SNAP_NAME]
         service = maas.services.get(MAAS_SERVICE, {})
-        return service.get("activate", False)
+        return service.get("active", False)
 
     @staticmethod
     def set_running(enable: bool) -> None:
