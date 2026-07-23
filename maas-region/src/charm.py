@@ -42,6 +42,13 @@ HAPROXY_INTERNAL_HTTP_API = "ingress-tcp-internal-http-api"
 
 MAAS_SNAP_CHANNEL = "3.8/edge"
 
+# Ubuntu bases each MAAS track's charm is published for. Must be updated when a new
+# track ships, used for upgrade compatibility checks.
+MAAS_TRACK_BASES: dict[str, list[str]] = {
+    "3.7": ["24.04"],
+    "3.8": ["26.04"],
+}
+
 MAAS_PROXY_PORT = 80
 MAAS_TLS_PROXY_PORT = 443
 
@@ -114,6 +121,20 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     Pre-release suffixes such as "~alpha1" are dropped.
     """
     return tuple(int(part) for part in version.split("~")[0].split(".") if part.isdigit())
+
+
+def _epoch_compatible(current: dict[str, list[int]], target: dict[str, list[int]]) -> bool:
+    """Whether a refresh from `current` to `target` is allowed by snap epoch rules.
+
+    snapd only permits a refresh when the target revision can read the data format
+    written by the current revision.
+    """
+    return bool(set(current["write"]) & set(target["read"]))
+
+
+def _format_epoch(epoch: dict[str, list[int]]) -> str:
+    """Render an epoch for display in action results."""
+    return f"read={epoch['read']} write={epoch['write']}"
 
 
 @trace_charm(
@@ -244,66 +265,175 @@ class MaasRegionCharm(ops.CharmBase):
             charm=self, relation=MAAS_INIT_RELATION, callback=self._on_rolling_maas_init
         )
         # self.upgrade_manager = RollingOpsManager(
-        #     charm=self, relation=MAAS_UPGRADE_RELATION, callback=self._on_upgrade_action
+        #     charm=self, relation=MAAS_UPGRADE_RELATION, callback=self._upgrade
         # )
 
-    def _on_upgrade_action(self, _event: ops.ActionEvent) -> None:
+    def _upgrade(self) -> None:
+        """Upgrade the MAAS snap.
+
+        Raises:
+            Exception: if the snap upgrade fails
+        """
         self.unit.status = ops.MaintenanceStatus("upgrading...")
+        MaasHelper.upgrade(MAAS_SNAP_CHANNEL)
+
+    def _on_upgrade_action(self, event: ops.ActionEvent) -> None:
+        """Handle the upgrade action.
+
+        Args:
+            event (ops.ActionEvent): Event from the framework
+        """
         try:
-            MaasHelper.upgrade(MAAS_SNAP_CHANNEL)
+            self._upgrade()
         except Exception as ex:
-            logger.error(str(ex))
+            logger.exception("Failed to upgrade MAAS")
+            event.fail(f"Upgrade failed: {ex}")
+            return
+        event.set_results(
+            {
+                "version": MaasHelper.get_installed_version(),
+                "revision": MaasHelper.get_installed_revision(),
+            }
+        )
 
     def _on_pre_upgrade_check_action(self, event: ops.ActionEvent) -> None:
-        current_version = MaasHelper.get_installed_version()
-        current_revision = MaasHelper.get_installed_revision()
-        channel = MaasHelper.get_installed_channel()
-        if not current_version or not current_revision or not channel:
+        if self.unit.status != ops.ActiveStatus():
+            event.fail(f"Unit is not active, do not attempt an upgrade. Current status: {self.unit.status}")
+            return
+
+        target_channel = event.params.get("channel")
+        if not target_channel:
+            target_channel = MAAS_SNAP_CHANNEL
+
+        installed_version = MaasHelper.get_installed_version()
+        installed_revision = MaasHelper.get_installed_revision()
+        installed_channel = MaasHelper.get_installed_channel()
+        if not installed_version or not installed_revision or not installed_channel:
             event.fail("MAAS is not installed")
             return
+
         try:
-            target = MaasHelper.get_latest_snap_info(channel)
+            target_channel_info = MaasHelper.get_latest_channel_info(target_channel)
         except Exception:
             logger.exception("Failed to query the snap store for the latest MAAS version")
             event.fail(
-                f"Failed to query the snap store for the latest MAAS version on channel {channel}"
+                f"Failed to query the snap store for the latest MAAS version on channel {target_channel}"
             )
             return
-        if not target:
-            event.fail(f"No MAAS version found in the snap store for channel {channel}")
+        if not target_channel_info:
+            event.fail(f"No MAAS version found in the snap store for channel {target_channel}")
             return
 
-        track = channel.split("/")[0]
+        target_version = target_channel_info.get("version", "")
+        target_revision = target_channel_info.get("revision", "")
         results = {
-            "current-version": current_version,
-            "current-revision": current_revision,
-            "target-version": target["version"],
-            "target-revision": target["revision"],
-            "channel": channel,
+            "installed": f"{installed_version} (revision {installed_revision}) on channel {installed_channel}",
+            "upgrade-target": f"{target_version} (revision {target_revision}) on channel {target_channel}",
             "architecture": MaasHelper.get_host_architecture(),
         }
-        if target["revision"] == current_revision:
+
+        if target_revision == installed_revision:
             results["info"] = (
-                f"Currently on the latest version ({current_version}, "
-                f"revision {current_revision}) for track {track}, no need to upgrade."
+                f"Current installed revision ({installed_revision}) is the latest available on channel {target_channel}. No upgrade is needed."
             )
-        elif _version_tuple(target["version"]) < _version_tuple(current_version):
+            event.set_results(results)
+            return
+        elif _version_tuple(target_version) < _version_tuple(installed_version):
             event.fail(
-                f"The latest version on channel {channel} ({target['version']}) is older "
-                f"than the installed version ({current_version}). "
-                "Downgrades are not supported by MAAS."
+                f"The latest version ({target_version}) on channel {target_channel} is a downgrade compared to the installed version ({installed_version})."
+                f" MAAS does not support downgrades. Please use a channel with a newer version."
+                f"\n{results}"
             )
             return
-        else:
-            results["info"] = (
-                f"Upgrade available for track {track}: "
-                f"{current_version} (revision {current_revision}) -> "
-                f"{target['version']} (revision {target['revision']}). "
-                "Ensure a recent backup exists before upgrading. "
-                "Run the create-backup action to create one, "
-                "and list-backups to see existing backups."
-            )
+
+        if target_channel == MAAS_SNAP_CHANNEL:
+            # Point upgrade, no need for epoch compatibility check
+            results["info"] = f"Point upgrade is possible from {installed_version} to {target_version}."
+            event.set_results(results)
+            return
+        if epoch_error := self._check_epoch_compatibility(
+            target_channel, installed_channel, target_channel_info["epoch"]
+        ):
+            event.fail(epoch_error)
+            return
+
+        # A move between tracks may also require a base change
+        if base_error := self._check_base_compatibility(target_channel, results):
+            event.fail(base_error)
+            return
+
         event.set_results(results)
+
+    def _check_epoch_compatibility(
+        self, target_channel: str, installed_channel: str, target_epoch: dict[str, list[int]]
+    ) -> str | None:
+        """Check that MAAS data can migrate from the installed track to the target one.
+
+        Args:
+            target_channel (str): the channel being checked, e.g. "3.9/edge"
+            installed_channel (str): the channel currently installed, for reporting
+            target_epoch (dict[str, list[int]]): the target channel's snap epoch
+
+        Returns:
+            str | None: a failure message if the move is not possible
+        """
+        try:
+            installed_channel_info = MaasHelper.get_latest_channel_info(MAAS_SNAP_CHANNEL)
+        except Exception:
+            logger.exception("Failed to query the snap store for channel %s", MAAS_SNAP_CHANNEL)
+            return (
+                f"Failed to query the snap store for the latest MAAS version "
+                f"on channel {MAAS_SNAP_CHANNEL}"
+            )
+        if not installed_channel_info:
+            return f"No MAAS version found in the snap store for channel {MAAS_SNAP_CHANNEL}"
+
+        current_epoch = installed_channel_info["epoch"]
+        if _epoch_compatible(current_epoch, target_epoch):
+            return None
+        return (
+            f"Channel {target_channel} is not epoch compatible with {installed_channel}: "
+            f"{installed_channel} has {_format_epoch(current_epoch)} and {target_channel} has "
+            f"{_format_epoch(target_epoch)}. "
+            "Upgrade to an intermediate release first."
+        )
+
+    def _check_base_compatibility(self, target_channel: str, results: dict[str, Any]) -> str | None:
+        """Record base compatibility for a target channel, in place, in `results`.
+
+        Args:
+            target_channel (str): the channel being checked, e.g. "3.9/edge"
+            results (dict[str, Any]): action results to annotate
+
+        Returns:
+            str | None: a failure message if the target track needs a different base
+        """
+        host_base = MaasHelper.get_host_base()
+        target_track = target_channel.split("/")[0]
+        target_bases = MAAS_TRACK_BASES.get(target_track)
+        results["host-base"] = host_base
+
+        # An unmapped track is reported as undetermined: a stale map must not block
+        # an otherwise legitimate upgrade.
+        if target_bases is None:
+            results["target-bases"] = "unknown"
+            results["base-compatible"] = "unknown"
+            results["base-info"] = (
+                f"Track {target_track} is not known to this charm, so base compatibility "
+                "could not be determined. Check the charm's supported bases on Charmhub."
+            )
+            return None
+
+        results["target-bases"] = ", ".join(target_bases)
+        results["base-compatible"] = str(host_base in target_bases)
+        if host_base in target_bases:
+            return None
+        return (
+            f"Channel {target_channel} requires an Ubuntu base of "
+            f"{', '.join(target_bases)}, but this unit runs {host_base or 'unknown'}. "
+            "Changing base requires redeploying units on the new base, "
+            "it cannot be done with a charm refresh."
+        )
 
     @property
     def is_tls_config_enabled(self) -> bool:
@@ -763,14 +893,14 @@ class MaasRegionCharm(ops.CharmBase):
             e.add_status(ops.BlockedStatus(blocked_msg))
         elif MaasHelper.get_installed_channel() != MAAS_SNAP_CHANNEL:
             e.add_status(ops.BlockedStatus("MAAS snap channel does not match the charm channel"))
-        elif not MaasHelper.is_running():
-            e.add_status(ops.BlockedStatus("MAAS snap is stopped"))
         elif not self.unit.opened_ports().issuperset(MAAS_REGION_PORTS):
             e.add_status(ops.WaitingStatus("Waiting for service ports"))
         elif not self.connection_string:
             e.add_status(ops.WaitingStatus("Waiting for database DSN"))
         elif not self.maas_api_url:
             e.add_status(ops.WaitingStatus("Waiting for MAAS initialization"))
+        elif not MaasHelper.is_running():
+            e.add_status(ops.BlockedStatus("The MAAS snap service is not active"))
         else:
             # Check HAProxy configuration validity
             haproxy_non_tls = self.model.get_relation(HAPROXY_NON_TLS) is not None
@@ -919,7 +1049,7 @@ class MaasRegionCharm(ops.CharmBase):
     def _on_stop_maas_action(self, event: ops.ActionEvent):
         """Handle the stop-maas action."""
         try:
-            MaasHelper.stop()
+            MaasHelper.set_running(False)
             event.set_results({"status": "stopped"})
         except SnapError as e:
             event.fail(f"Failed to stop MAAS: {e}")
@@ -927,7 +1057,7 @@ class MaasRegionCharm(ops.CharmBase):
     def _on_start_maas_action(self, event: ops.ActionEvent):
         """Handle the start-maas action."""
         try:
-            MaasHelper.start()
+            MaasHelper.set_running(True)
             event.set_results({"status": "started"})
         except SnapError as e:
             event.fail(f"Failed to start MAAS: {e}")

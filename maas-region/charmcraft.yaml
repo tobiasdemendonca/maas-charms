@@ -134,6 +134,13 @@ actions:
     description: Upgrade MAAS workload to the latest version available to the machine for the relevant track of the charm, for example if the charm is deployed with --channel=3.7/stable, this action will upgrade from the current version to the latest 3.7.x version available.
   pre-upgrade-check:
     description: Check if the workload can be upgraded to the latest version available to the machine for the relevant track of the charm, for example if the charm is deployed with --channel=3.7/stable, this action will check if the workload can be upgraded from the current version to the latest 3.7.x version available.
+    params: 
+      channel:
+        type: string
+        description: >-
+          The channel to check for a minor or major upgrade. If not provided, the charm's current channel will be used, which assumes you are checking for a point release upgrade.
+          When a channel on a different track is given, the check also reports snap epoch compatibility and whether the target track's charm supports this machine's Ubuntu base.
+          Note that charm tracks directly align with snap tracks, so a channel on a different track is also a different snap track.
 
 parts:
   charm:

@@ -12,9 +12,10 @@ import subprocess
 import tempfile
 from os import remove
 from pathlib import Path
+from typing import Any
 
 import yaml
-from charms.operator_libs_linux.v2.snap import SnapCache, SnapError, SnapState
+from charms.operator_libs_linux.v2.snap import SnapCache, SnapClient, SnapError, SnapState
 from tenacity import retry, stop_after_delay, wait_fixed
 
 MAAS_SNAP_NAME = "maas"
@@ -145,13 +146,6 @@ class MaasHelper:
             maas.stop()
 
     @staticmethod
-    def start() -> None:
-        """Start snap."""
-        maas = SnapCache()[MAAS_SNAP_NAME]
-        if maas.present:
-            maas.start()
-
-    @staticmethod
     def get_installed_version() -> str | None:
         """Get installed version.
 
@@ -201,27 +195,69 @@ class MaasHelper:
         return subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
 
     @staticmethod
-    def get_latest_snap_info(channel: str) -> dict[str, str] | None:
-        """Get the latest version and revision available in the snap store for a channel.
+    def get_host_base() -> str:
+        """Get the Ubuntu base of this machine, e.g. "24.04".
 
-        The snap store resolves this for the architecture of this machine.
+        Returns:
+            str: the VERSION_ID from os-release, or "" if unavailable
+        """
+        try:
+            return platform.freedesktop_os_release().get("VERSION_ID", "")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def get_latest_channel_info(channel: str) -> dict[str, Any] | None:
+        """Get the latest version, revision and epoch available in the snap store for a channel.
+
+        The epoch is normalised to its expanded form, defaulting to the snap
+        default (epoch 0) when the store does not report one.
 
         Args:
             channel (str): snapstore channel, e.g. "3.7/stable"
 
         Returns:
-            Union[dict, None]: {"version": ..., "revision": ...} if the channel
-                exists in the store
+            Union[dict, None]: {"version": ..., "revision": ..., "epoch": ...} if the
+                channel exists in the store
         """
+        # Get snap information from the snap store for a specific channel.
         info = SnapClient().get_snap_information(MAAS_SNAP_NAME)
-        channel_info = info.get("channels", {}).get(channel)  # type: ignore[union-attr]
+        channels = info.get("channels")
+        if not isinstance(channels, dict):
+            return None
+        channel_info = channels.get(channel)
         if not isinstance(channel_info, dict):
             return None
         version = channel_info.get("version")
         revision = channel_info.get("revision")
         if version is None or revision is None:
             return None
-        return {"version": str(version).split("-")[0], "revision": str(revision)}
+        return {
+            "version": str(version).split("-")[0],
+            "revision": str(revision),
+            "epoch": MaasHelper._normalise_epoch(channel_info.get("epoch")),
+        }
+
+    @staticmethod
+    def _normalise_epoch(epoch: Any) -> dict[str, list[int]]:
+        """Normalise a snap store epoch into its expanded form.
+
+        Falls back to the snap default (epoch 0) when the store reports no epoch,
+        or reports one in an unexpected shape.
+
+        Args:
+            epoch (Any): the raw `epoch` value from the store channel map
+
+        Returns:
+            dict[str, list[int]]: {"read": [...], "write": [...]}
+        """
+        if not isinstance(epoch, dict):
+            return {"read": [0], "write": [0]}
+        normalised: dict[str, list[int]] = {}
+        for key in ("read", "write"):
+            values = epoch.get(key)
+            normalised[key] = [int(v) for v in values] if isinstance(values, list) else [0]
+        return normalised
 
     @staticmethod
     def get_maas_id() -> str | None:

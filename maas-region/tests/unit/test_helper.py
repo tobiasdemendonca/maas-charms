@@ -90,6 +90,60 @@ class TestHelperSnapCache(unittest.TestCase):
         maas.stop.assert_called_once()
 
 
+class TestHelperHostBase(unittest.TestCase):
+    @patch("helper.platform.freedesktop_os_release")
+    def test_get_host_base(self, mock_os_release):
+        mock_os_release.return_value = {"ID": "ubuntu", "VERSION_ID": "24.04"}
+        self.assertEqual(MaasHelper.get_host_base(), "24.04")
+
+    @patch("helper.platform.freedesktop_os_release")
+    def test_get_host_base_unavailable(self, mock_os_release):
+        mock_os_release.side_effect = OSError
+        self.assertEqual(MaasHelper.get_host_base(), "")
+
+
+class TestHelperSnapStore(unittest.TestCase):
+    def _setup_client(self, mock_client, channels):
+        instance = mock_client.return_value
+        instance.get_snap_information.return_value = {"channels": channels}
+        return instance
+
+    @patch("helper.SnapClient", autospec=True)
+    def test_get_latest_channel_info(self, mock_client):
+        self._setup_client(
+            mock_client,
+            {
+                "3.7/edge": {
+                    "version": "3.7.3-18027-g.fb1c391db",
+                    "revision": "42358",
+                    "epoch": {"read": [3, 4], "write": [4]},
+                }
+            },
+        )
+        info = MaasHelper.get_latest_channel_info("3.7/edge")
+        self.assertEqual(
+            info,
+            {
+                "version": "3.7.3",
+                "revision": "42358",
+                "epoch": {"read": [3, 4], "write": [4]},
+            },
+        )
+
+    @patch("helper.SnapClient", autospec=True)
+    def test_get_latest_channel_info_defaults_epoch(self, mock_client):
+        self._setup_client(
+            mock_client, {"3.7/edge": {"version": "3.7.3", "revision": "42358"}}
+        )
+        info = MaasHelper.get_latest_channel_info("3.7/edge")
+        self.assertEqual(info["epoch"], {"read": [0], "write": [0]})
+
+    @patch("helper.SnapClient", autospec=True)
+    def test_get_latest_channel_info_unknown_channel(self, mock_client):
+        self._setup_client(mock_client, {"3.7/edge": {"version": "3.7.3", "revision": "42358"}})
+        self.assertIsNone(MaasHelper.get_latest_channel_info("3.9/edge"))
+
+
 class TestHelperFiles(unittest.TestCase):
     @patch("pathlib.Path.open", new_callable=lambda: mock_open(read_data="maas-id\n"))
     def test_get_maas_id(self, _):
