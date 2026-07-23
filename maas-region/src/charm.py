@@ -346,7 +346,7 @@ class MaasRegionCharm(ops.CharmBase):
             )
             return
 
-        if target_channel == MAAS_SNAP_CHANNEL:
+        if target_channel == installed_channel:
             # Point upgrade, no need for epoch compatibility check
             results["info"] = f"Point upgrade is possible from {installed_version} to {target_version}."
             event.set_results(results)
@@ -378,15 +378,15 @@ class MaasRegionCharm(ops.CharmBase):
             str | None: a failure message if the move is not possible
         """
         try:
-            installed_channel_info = MaasHelper.get_latest_channel_info(MAAS_SNAP_CHANNEL)
+            installed_channel_info = MaasHelper.get_latest_channel_info(installed_channel)
         except Exception:
-            logger.exception("Failed to query the snap store for channel %s", MAAS_SNAP_CHANNEL)
+            logger.exception("Failed to query the snap store for channel %s", installed_channel)
             return (
                 f"Failed to query the snap store for the latest MAAS version "
-                f"on channel {MAAS_SNAP_CHANNEL}"
+                f"on channel {installed_channel}"
             )
         if not installed_channel_info:
-            return f"No MAAS version found in the snap store for channel {MAAS_SNAP_CHANNEL}"
+            return f"No MAAS version found in the snap store for channel {installed_channel}"
 
         current_epoch = installed_channel_info["epoch"]
         if _epoch_compatible(current_epoch, target_epoch):
