@@ -186,15 +186,6 @@ class MaasHelper:
         return maas.revision if maas.present else None
 
     @staticmethod
-    def get_host_architecture() -> str:
-        """Get the snap architecture of this machine, e.g. "amd64".
-
-        Returns:
-            str: the dpkg architecture name
-        """
-        return subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
-
-    @staticmethod
     def get_host_base() -> str:
         """Get the Ubuntu base of this machine, e.g. "24.04".
 

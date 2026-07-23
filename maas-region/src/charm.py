@@ -312,25 +312,31 @@ class MaasRegionCharm(ops.CharmBase):
             event.fail("MAAS is not installed")
             return
 
+        # Populated as the check progresses so that every exit, including the failures
+        # below, reports whatever was established before the check stopped.
+        results = {
+            "installed": f"{installed_version} (revision {installed_revision}) on channel {installed_channel}",
+        }
+
         try:
             target_channel_info = MaasHelper.get_latest_channel_info(target_channel)
         except Exception:
             logger.exception("Failed to query the snap store for the latest MAAS version")
+            event.set_results(results)
             event.fail(
-                f"Failed to query the snap store for the latest MAAS version on channel {target_channel}"
+                f"Failed to query the snap store for the latest MAAS version on channel {target_channel}, cannot determine if an upgrade is possible."
             )
             return
         if not target_channel_info:
+            event.set_results(results)
             event.fail(f"No MAAS version found in the snap store for channel {target_channel}")
             return
 
         target_version = target_channel_info.get("version", "")
         target_revision = target_channel_info.get("revision", "")
-        results = {
-            "installed": f"{installed_version} (revision {installed_revision}) on channel {installed_channel}",
-            "upgrade-target": f"{target_version} (revision {target_revision}) on channel {target_channel}",
-            "architecture": MaasHelper.get_host_architecture(),
-        }
+        results["upgrade-target"] = (
+            f"{target_version} (revision {target_revision}) on channel {target_channel}"
+        )
 
         if target_revision == installed_revision:
             results["info"] = (
@@ -339,10 +345,10 @@ class MaasRegionCharm(ops.CharmBase):
             event.set_results(results)
             return
         elif _version_tuple(target_version) < _version_tuple(installed_version):
+            event.set_results(results)
             event.fail(
                 f"The latest version ({target_version}) on channel {target_channel} is a downgrade compared to the installed version ({installed_version})."
-                f" MAAS does not support downgrades. Please use a channel with a newer version."
-                f"\n{results}"
+                f" MAAS does not support downgrades. Please use a channel with a newer version.\n"
             )
             return
 
@@ -354,11 +360,13 @@ class MaasRegionCharm(ops.CharmBase):
         if epoch_error := self._check_epoch_compatibility(
             target_channel, installed_channel, target_channel_info["epoch"]
         ):
+            event.set_results(results)
             event.fail(epoch_error)
             return
 
         # A move between tracks may also require a base change
         if base_error := self._check_base_compatibility(target_channel, results):
+            event.set_results(results)
             event.fail(base_error)
             return
 
@@ -416,7 +424,7 @@ class MaasRegionCharm(ops.CharmBase):
         # An unmapped track is reported as undetermined: a stale map must not block
         # an otherwise legitimate upgrade.
         if target_bases is None:
-            results["target-bases"] = "unknown"
+            results["upgrade-target-charm-bases"] = "unknown"
             results["base-compatible"] = "unknown"
             results["base-info"] = (
                 f"Track {target_track} is not known to this charm, so base compatibility "
@@ -424,15 +432,14 @@ class MaasRegionCharm(ops.CharmBase):
             )
             return None
 
-        results["target-bases"] = ", ".join(target_bases)
+        results["upgrade-target-charm-bases"] = ", ".join(target_bases)
         results["base-compatible"] = str(host_base in target_bases)
         if host_base in target_bases:
             return None
         return (
             f"Channel {target_channel} requires an Ubuntu base of "
             f"{', '.join(target_bases)}, but this unit runs {host_base or 'unknown'}. "
-            "Changing base requires redeploying units on the new base, "
-            "it cannot be done with a charm refresh."
+            "Changing base requires redeploying units on the new base."
         )
 
     @property
