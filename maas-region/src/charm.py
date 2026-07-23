@@ -276,6 +276,8 @@ class MaasRegionCharm(ops.CharmBase):
         """
         self.unit.status = ops.MaintenanceStatus("upgrading...")
         MaasHelper.upgrade(MAAS_SNAP_CHANNEL)
+        if workload_version := self.version:
+            self.unit.set_workload_version(workload_version)
 
     def _on_upgrade_action(self, event: ops.ActionEvent) -> None:
         """Handle the upgrade action.
@@ -297,10 +299,6 @@ class MaasRegionCharm(ops.CharmBase):
         )
 
     def _on_pre_upgrade_check_action(self, event: ops.ActionEvent) -> None:
-        if self.unit.status != ops.ActiveStatus():
-            event.fail(f"Unit is not active, do not attempt an upgrade. Current status: {self.unit.status}")
-            return
-
         target_channel = event.params.get("channel")
         if not target_channel:
             target_channel = MAAS_SNAP_CHANNEL
