@@ -12,6 +12,7 @@ classifiers = [
 dependencies = [
   "boto3>=1.43.11,<1.44",
   "botocore>=1.43.11,<1.44",
+  "charmlibs-rollingops>=1.1.1",
   "cosl",
   "opentelemetry-api",
   "opentelemetry-exporter-otlp-proto-http>=1.21",
