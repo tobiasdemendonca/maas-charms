@@ -43,6 +43,7 @@ scenario = [
 ]
 unit = [
   "coverage[toml]",
+  "hypothesis",
   "pytest",
 ]
 
